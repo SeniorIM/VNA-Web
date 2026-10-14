@@ -25,12 +25,8 @@ async def install_packages():
             print(f">>> خطا در نصب {pkg}: {e}")
 
 
-await install_packages()
-print(">>> همه پکیج‌ها نصب شدند")
-
-
 # ============================================================
-#          توابع پردازش
+#          توابع پردازش (بدون تغییر)
 # ============================================================
 
 def perspective_rectify(image_bgr, corners):
@@ -272,8 +268,18 @@ def process_image(img_array, corners_list, calib_dict):
 
 
 # ============================================================
-#          اتصال به window
+#          اتصال به window + اجرا
 # ============================================================
 
-window.process_image = process_image
-print(">>> process_image به window وصل شد ✅")
+async def main():
+    """تابع اصلی - اینجا await مجاز است"""
+    await install_packages()
+    print(">>> همه پکیج‌ها نصب شدند")
+    
+    # اتصال تابع به window
+    window.process_image = process_image
+    print(">>> process_image به window وصل شد ✅")
+
+
+# اجرای main
+await main()
