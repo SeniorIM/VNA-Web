@@ -1,9 +1,8 @@
 """
 استخراج دقیق منحنی S11 از عکس VNA
-نسخه نهایی وب
+نسخه نهایی - بدون نیاز به pyodide.loadPackage
 """
 from js import window
-import pyodide_js
 
 print(">>> main.py شروع به اجرا کرد")
 
@@ -12,14 +11,21 @@ async def main():
     """تابع اصلی"""
     
     # ============================================================
-    #          نصب micropip
+    #          import micropip (قبلاً در PyScript نصب است)
     # ============================================================
-    print(">>> نصب micropip...")
-    await pyodide_js.loadPackage("micropip")
-    print(">>> micropip نصب شد ✅")
+    try:
+        import micropip
+        print(">>> micropip موجود است ✅")
+    except ImportError:
+        print(">>> micropip پیدا نشد، تلاش برای نصب از js...")
+        from js import pyodide
+        await pyodide.loadPackage("micropip")
+        import micropip
+        print(">>> micropip نصب شد ✅")
     
-    import micropip
-    
+    # ============================================================
+    #          نصب پکیج‌ها
+    # ============================================================
     packages = ["numpy", "opencv-python", "pandas", "openpyxl", "scipy"]
     for pkg in packages:
         try:
@@ -32,7 +38,7 @@ async def main():
     print(">>> همه پکیج‌ها نصب شدند")
     
     # ============================================================
-    #          حالا import کن
+    #          import کتابخانه‌ها
     # ============================================================
     import numpy as np
     import cv2
