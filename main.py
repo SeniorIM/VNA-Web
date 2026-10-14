@@ -1,9 +1,10 @@
 """
 استخراج دقیق منحنی S11 از عکس VNA
-نسخه نهایی وب - با pyodide_js
+نسخه نهایی وب - با JSON output
 """
 import pyodide_js
 from js import window
+import json
 
 print(">>> main.py شروع به اجرا کرد")
 
@@ -227,7 +228,7 @@ def extract_trace(mask):
 
 
 # ============================================================
-#          Wrapper برای JavaScript (نسخه نهایی)
+#          Wrapper برای JavaScript
 # ============================================================
 
 def process_image(img_array, corners_list, calib_dict):
@@ -270,12 +271,15 @@ def process_image(img_array, corners_list, calib_dict):
         
         print(f">>> نتیجه: {len(frequency)} نقطه")
         
-        return {
+        # ===== برگرداندن به صورت رشته JSON =====
+        result_json = json.dumps({
             'frequency': frequency.tolist(),
             'amplitude': amplitude_db.tolist(),
             'x_raw': x_raw.tolist(),
             'y_raw': y_raw.tolist(),
-        }
+        })
+        return result_json
+        
     except Exception as e:
         print(f">>> خطا: {e}")
         import traceback

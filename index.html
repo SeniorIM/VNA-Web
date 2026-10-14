@@ -256,7 +256,20 @@ async function runExtraction() {
             d2: parseFloat(document.getElementById('d2').value)
         };
         const imgArray = await imageToArray(STATE.image);
-        const result = await window.process_image(imgArray, corners, calib);
+        
+        // ===== فراخوانی تابع پایتون =====
+        let resultRaw = await window.process_image(imgArray, corners, calib);
+        
+        // ===== تبدیل رشته JSON به Object =====
+        let result;
+        if (typeof resultRaw === 'string') {
+            result = JSON.parse(resultRaw);
+        } else if (resultRaw && typeof resultRaw.toJs === 'function') {
+            result = resultRaw.toJs({dict_converter: Object.fromEntries});
+        } else {
+            result = resultRaw;
+        }
+        
         STATE.result = result;
         showResult(result);
         document.getElementById('status3').textContent = `✅ ${result.frequency.length} نقطه`;
