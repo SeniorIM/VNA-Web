@@ -1,6 +1,6 @@
 """
 استخراج دقیق منحنی S11 از عکس VNA
-نسخه نهایی - طبق مستندات رسمی Pyodide
+نسخه نهایی وب - با pyodide_js
 """
 import pyodide_js
 from js import window
@@ -9,7 +9,7 @@ print(">>> main.py شروع به اجرا کرد")
 
 
 # ============================================================
-#          نصب micropip از طریق pyodide_js (روش رسمی)
+#          نصب micropip و پکیج‌ها
 # ============================================================
 print(">>> نصب micropip از طریق pyodide_js...")
 await pyodide_js.loadPackage("micropip")
@@ -31,14 +31,14 @@ print(">>> همه پکیج‌ها نصب شدند")
 
 
 # ============================================================
-#          حالا import کن
+#          Import کتابخانه‌ها
 # ============================================================
 import numpy as np
 import cv2
 
 
 # ============================================================
-#          توابع پردازش
+#          توابع پردازش تصویر
 # ============================================================
 
 def perspective_rectify(image_bgr, corners):
@@ -227,12 +227,16 @@ def extract_trace(mask):
 
 
 # ============================================================
-#          Wrapper برای JavaScript
+#          Wrapper برای JavaScript (نسخه نهایی)
 # ============================================================
 
 def process_image(img_array, corners_list, calib_dict):
     print(">>> process_image فراخوانی شد")
     try:
+        # ===== تبدیل JsProxy به Python =====
+        calib = calib_dict.to_py() if hasattr(calib_dict, 'to_py') else calib_dict
+        corners_js = corners_list.to_py() if hasattr(corners_list, 'to_py') else corners_list
+        
         h = window.imageHeight
         w = window.imageWidth
         print(f">>> ابعاد: {w}x{h}")
@@ -241,7 +245,7 @@ def process_image(img_array, corners_list, calib_dict):
         img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         print(">>> RGB→BGR انجام شد")
         
-        corners = np.array(corners_list, dtype=float)
+        corners = np.array(corners_js, dtype=float)
         rectified = perspective_rectify(img_bgr, corners)
         print(">>> rectify انجام شد")
         
@@ -251,10 +255,10 @@ def process_image(img_array, corners_list, calib_dict):
         x_clean, y_clean, x_raw, y_raw = extract_trace(mask)
         print(f">>> استخراج: {len(x_clean)} نقطه")
         
-        x1 = calib_dict['x1']; f1 = calib_dict['f1']
-        x2 = calib_dict['x2']; f2 = calib_dict['f2']
-        y1 = calib_dict['y1']; d1 = calib_dict['d1']
-        y2 = calib_dict['y2']; d2 = calib_dict['d2']
+        x1 = calib['x1']; f1 = calib['f1']
+        x2 = calib['x2']; f2 = calib['f2']
+        y1 = calib['y1']; d1 = calib['d1']
+        y2 = calib['y2']; d2 = calib['d2']
         
         frequency = f1 + (x_clean - x1) * (f2 - f1) / (x2 - x1)
         amplitude_db = d1 + (y_clean - y1) * (d2 - d1) / (y2 - y1)
