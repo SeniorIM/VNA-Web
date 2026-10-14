@@ -1,13 +1,45 @@
 """
 استخراج دقیق منحنی S11 از عکس VNA
-نسخه نهایی - پکیج‌ها از py-config نصب می‌شوند
+نسخه نهایی - طبق مستندات رسمی Pyodide
 """
-import numpy as np
-import cv2
+import pyodide_js
 from js import window
 
 print(">>> main.py شروع به اجرا کرد")
 
+
+# ============================================================
+#          نصب micropip از طریق pyodide_js (روش رسمی)
+# ============================================================
+print(">>> نصب micropip از طریق pyodide_js...")
+await pyodide_js.loadPackage("micropip")
+print(">>> micropip نصب شد ✅")
+
+import micropip
+
+print(">>> نصب پکیج‌های دیگر...")
+packages = ["numpy", "opencv-python", "pandas", "openpyxl", "scipy"]
+for pkg in packages:
+    try:
+        print(f">>> نصب {pkg}...")
+        await micropip.install(pkg)
+        print(f">>> {pkg} نصب شد ✅")
+    except Exception as e:
+        print(f">>> خطا در نصب {pkg}: {e}")
+
+print(">>> همه پکیج‌ها نصب شدند")
+
+
+# ============================================================
+#          حالا import کن
+# ============================================================
+import numpy as np
+import cv2
+
+
+# ============================================================
+#          توابع پردازش
+# ============================================================
 
 def perspective_rectify(image_bgr, corners):
     tl, tr, br, bl = corners
