@@ -2,20 +2,20 @@
 استخراج دقیق منحنی S11 از عکس VNA
 نسخه نهایی وب
 """
-import pyodide
-import js
 from js import window
+import pyodide_js
 
 print(">>> main.py شروع به اجرا کرد")
 
 
 async def main():
     """تابع اصلی"""
+    
     # ============================================================
-    #          نصب micropip و پکیج‌ها
+    #          نصب micropip
     # ============================================================
     print(">>> نصب micropip...")
-    await pyodide.loadPackage("micropip")
+    await pyodide_js.loadPackage("micropip")
     print(">>> micropip نصب شد ✅")
     
     import micropip
