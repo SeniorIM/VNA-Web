@@ -1,10 +1,37 @@
 """
-منطق استخراج منحنی - همان کد، فقط ورودی از JS
+استخراج دقیق منحنی S11 از عکس VNA
+نسخه نهایی وب - با micropip
 """
+import micropip
 import numpy as np
 import cv2
 from js import window
 
+print(">>> main.py شروع به اجرا کرد")
+
+
+# ============================================================
+#          نصب خودکار پکیج‌ها
+# ============================================================
+
+async def install_packages():
+    packages = ["numpy", "opencv-python", "pandas", "openpyxl", "scipy"]
+    for pkg in packages:
+        try:
+            print(f">>> نصب {pkg}...")
+            await micropip.install(pkg)
+            print(f">>> {pkg} نصب شد ✅")
+        except Exception as e:
+            print(f">>> خطا در نصب {pkg}: {e}")
+
+
+await install_packages()
+print(">>> همه پکیج‌ها نصب شدند")
+
+
+# ============================================================
+#          توابع پردازش
+# ============================================================
 
 def perspective_rectify(image_bgr, corners):
     tl, tr, br, bl = corners
@@ -36,12 +63,10 @@ def remove_small_components(mask, min_width_ratio=0.02):
     count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
     cleaned = np.zeros_like(binary)
     min_width = max(10, int(w * min_width_ratio))
-    kept = 0
     for label in range(1, count):
         x, y, cw, ch, area = stats[label]
         if cw >= min_width:
             cleaned[labels == label] = 1
-            kept += 1
     return cleaned
 
 
@@ -194,48 +219,61 @@ def extract_trace(mask):
 
 
 # ============================================================
-#          Wrapper برای فراخوانی از JavaScript
+#          Wrapper برای JavaScript
 # ============================================================
 
 def process_image(img_array, corners_list, calib_dict):
-    """
-    img_array: آرایه تخت RGB از JS
-    corners_list: [[x,y], ...] 4 گوشه
-    calib_dict: {x1, f1, x2, f2, y1, d1, y2, d2}
-    """
-    # تبدیل آرایه تخت به تصویر
-    # تشخیص ابعاد از طول آرایه
-    n_pixels = len(img_array) // 3
-    # ارتفاع و عرض از JS می‌آید
-    h = window.imageHeight
-    w = window.imageWidth
-    
-    img_rgb = np.frombuffer(bytes(img_array), dtype=np.uint8).reshape((h, w, 3))
-    img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-    
-    corners = np.array(corners_list, dtype=float)
-    rectified = perspective_rectify(img_bgr, corners)
-    
-    mask = detect_yellow_trace(rectified)
-    x_clean, y_clean, x_raw, y_raw = extract_trace(mask)
-    
-    x1 = calib_dict['x1']; f1 = calib_dict['f1']
-    x2 = calib_dict['x2']; f2 = calib_dict['f2']
-    y1 = calib_dict['y1']; d1 = calib_dict['d1']
-    y2 = calib_dict['y2']; d2 = calib_dict['d2']
-    
-    frequency = f1 + (x_clean - x1) * (f2 - f1) / (x2 - x1)
-    amplitude_db = d1 + (y_clean - y1) * (d2 - d1) / (y2 - y1)
-    
-    lo, hi = sorted((f1, f2))
-    valid = (frequency >= lo) & (frequency <= hi)
-    frequency = frequency[valid]
-    amplitude_db = amplitude_db[valid]
-    
-    return {
-        'frequency': frequency.tolist(),
-        'amplitude': amplitude_db.tolist(),
-    }
+    print(">>> process_image فراخوانی شد")
+    try:
+        h = window.imageHeight
+        w = window.imageWidth
+        print(f">>> ابعاد: {w}x{h}")
+        
+        img_rgb = np.frombuffer(bytes(img_array), dtype=np.uint8).reshape((h, w, 3))
+        img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        print(">>> RGB→BGR انجام شد")
+        
+        corners = np.array(corners_list, dtype=float)
+        rectified = perspective_rectify(img_bgr, corners)
+        print(">>> rectify انجام شد")
+        
+        mask = detect_yellow_trace(rectified)
+        print(f">>> mask: {np.count_nonzero(mask)} pixels")
+        
+        x_clean, y_clean, x_raw, y_raw = extract_trace(mask)
+        print(f">>> استخراج: {len(x_clean)} نقطه")
+        
+        x1 = calib_dict['x1']; f1 = calib_dict['f1']
+        x2 = calib_dict['x2']; f2 = calib_dict['f2']
+        y1 = calib_dict['y1']; d1 = calib_dict['d1']
+        y2 = calib_dict['y2']; d2 = calib_dict['d2']
+        
+        frequency = f1 + (x_clean - x1) * (f2 - f1) / (x2 - x1)
+        amplitude_db = d1 + (y_clean - y1) * (d2 - d1) / (y2 - y1)
+        
+        lo, hi = sorted((f1, f2))
+        valid = (frequency >= lo) & (frequency <= hi)
+        frequency = frequency[valid]
+        amplitude_db = amplitude_db[valid]
+        
+        print(f">>> نتیجه: {len(frequency)} نقطه")
+        
+        return {
+            'frequency': frequency.tolist(),
+            'amplitude': amplitude_db.tolist(),
+            'x_raw': x_raw.tolist(),
+            'y_raw': y_raw.tolist(),
+        }
+    except Exception as e:
+        print(f">>> خطا: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
+
+# ============================================================
+#          اتصال به window
+# ============================================================
 
 window.process_image = process_image
+print(">>> process_image به window وصل شد ✅")

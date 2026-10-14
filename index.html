@@ -235,6 +235,12 @@ function resetClicks() {
 }
 
 async function runExtraction() {
+    if (typeof window.process_image !== 'function') {
+        document.getElementById('status3').textContent = 
+            '⏳ لطفاً ۳۰ ثانیه صبر کنید (نصب پکیج‌ها)';
+        return;
+    }
+    
     document.getElementById('status3').textContent = '⏳ در حال استخراج...';
     document.getElementById('extractBtn').disabled = true;
     try {
@@ -319,17 +325,41 @@ function downloadExcel() {
     if (!STATE.result) return;
     const xs = STATE.result.frequency;
     const ys = STATE.result.amplitude;
+    
+    // شیت 1: منحنی
     const data = [['Frequency_GHz', 'Amplitude_dB']];
-    for (let i = 0; i < xs.length; i++) data.push([xs[i], ys[i]]);
+    for (let i = 0; i < xs.length; i++) {
+        data.push([xs[i], ys[i]]);
+    }
     const ws = XLSX.utils.aoa_to_sheet(data);
     ws['!cols'] = [{ wch: 18 }, { wch: 18 }];
+    
+    // شیت 2: کالیبراسیون
+    const calibData = [
+        ['Parameter', 'Value'],
+        ['X1 pixel', STATE.xPoints[0].x],
+        ['F1 (GHz)', parseFloat(document.getElementById('f1').value)],
+        ['X2 pixel', STATE.xPoints[1].x],
+        ['F2 (GHz)', parseFloat(document.getElementById('f2').value)],
+        ['Y1 pixel', STATE.yPoints[0].y],
+        ['D1 (dB)', parseFloat(document.getElementById('d1').value)],
+        ['Y2 pixel', STATE.yPoints[1].y],
+        ['D2 (dB)', parseFloat(document.getElementById('d2').value)],
+        ['Total points', xs.length]
+    ];
+    const ws2 = XLSX.utils.aoa_to_sheet(calibData);
+    ws2['!cols'] = [{ wch: 20 }, { wch: 20 }];
+    
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Curve');
-    XLSX.writeFile(wb, 'vna_curve.xlsx');
+    XLSX.utils.book_append_sheet(wb, ws2, 'Calibration');
+    
+    const timestamp = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `vna_curve_${timestamp}.xlsx`);
 }
 </script>
 
-<script type="py" src="./main.py"></script>
+<script type="py" src="./main.py" async></script>
 
 </body>
 </html>
