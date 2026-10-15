@@ -34,7 +34,7 @@
         .btn-success { background: #4caf50; }
         .btn-warning { background: #ff9800; }
         .btn-danger { background: #f44336; }
-        .btn-small { padding: 8px; font-size: 14px; }
+        .btn-small { padding: 10px; font-size: 14px; }
 
         .canvas-wrap {
             width: 100%;
@@ -92,7 +92,7 @@
 
         .extra-line-row {
             display: grid;
-            grid-template-columns: 1fr 1fr 40px;
+            grid-template-columns: 40px 1fr 40px;
             gap: 6px;
             align-items: center;
             margin-bottom: 6px;
@@ -193,15 +193,17 @@
             سیستم با کمترین مربعات، دقیق‌ترین نگاشت پیکسل → فرکانس را می‌سازد.
         </div>
 
-        <div style="margin-top:10px; display:flex; gap:6px;">
-            <button class="btn btn-warning btn-small" id="addExtraBtn" onclick="startAddingExtraLine()" style="flex:1;">
+        <div style="margin-top:10px;">
+            <button class="btn btn-warning btn-small" id="addExtraBtn" onclick="startAddingExtraLine()">
                 ➕ افزودن خط عمودی مرجع
             </button>
         </div>
 
         <div id="extraLinesList" style="margin-top:10px;"></div>
 
-        <div id="extraStatus" style="margin-top:8px; font-size:13px; color:#4fc3f7; text-align:center;"></div>
+        <div id="extraStatus" style="margin-top:8px; font-size:13px; color:#888; text-align:center;">
+            هیچ خط مرجع اضافی وارد نشده (روش ۲ نقطه‌ای استفاده می‌شود)
+        </div>
     </details>
 
     <button class="btn btn-success" id="extractBtn" onclick="runExtraction()" style="margin-top:12px">
@@ -350,10 +352,8 @@ const STATE = {
     mouseDownPos: null,
     touchPending: null,
 
-    // خطوط مرجع اضافی برای کالیبراسیون X
-    extraLines: [],          // [{x, freq}]
-    addingExtra: false,      // حالت انتظار برای کلیک
-    extraClickHandler: null,
+    extraLines: [],       // [{x, freq}]
+    addingExtra: false,
     extraCounter: 0,
 };
 
@@ -466,7 +466,6 @@ function findLineAt(x, y) {
             if (Math.abs(y - line.y) <= STATE.dragTolerance) return i;
         }
     }
-    // خطوط اضافی
     for (let i = STATE.extraLines.length - 1; i >= 0; i--) {
         if (Math.abs(x - STATE.extraLines[i].x) <= STATE.dragTolerance) {
             return 1000 + i;
@@ -715,7 +714,6 @@ function drawLine(line) {
 
 function drawExtraLine(line, index) {
     const ctx = canvas.getContext('2d');
-    // خط پس‌زمینه تیره
     ctx.strokeStyle = 'rgba(0,0,0,0.6)';
     ctx.lineWidth = 5;
     ctx.setLineDash([4, 6]);
@@ -724,7 +722,6 @@ function drawExtraLine(line, index) {
     ctx.lineTo(line.x, canvas.height);
     ctx.stroke();
 
-    // خط نارنجی
     ctx.strokeStyle = EXTRA_COLOR;
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -733,12 +730,10 @@ function drawExtraLine(line, index) {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // برچسب
     const label = (index + 1).toString();
     ctx.fillStyle = EXTRA_COLOR;
     ctx.font = 'bold 14px Arial';
     ctx.textAlign = 'center';
-    // پس‌زمینه برچسب
     const tw = ctx.measureText(label).width + 8;
     ctx.fillRect(line.x - tw/2, 25, tw, 18);
     ctx.fillStyle = '#000';
@@ -746,7 +741,6 @@ function drawExtraLine(line, index) {
 }
 
 function undoLastLine() {
-    // اگر خط اضافی هست، اول اون رو حذف کن
     if (STATE.extraLines.length > 0) {
         STATE.extraLines.pop();
         renderExtraLinesList();
@@ -772,7 +766,7 @@ function undoLastLine() {
 }
 
 // ============================================================
-//   خطوط مرجع اضافی (کالیبراسیون دقیق X)
+//   خطوط مرجع اضافی
 // ============================================================
 function startAddingExtraLine() {
     if (STATE.extraLines.length >= 8) {
@@ -782,6 +776,8 @@ function startAddingExtraLine() {
     STATE.addingExtra = true;
     canvas.style.cursor = 'crosshair';
     updateExtraStatus();
+    // اسکرول به بالای صفحه تا کاربر canvas را ببیند
+    document.getElementById('clickCard').scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
 function renderExtraLinesList() {
@@ -794,14 +790,6 @@ function renderExtraLinesList() {
         const idx = document.createElement('div');
         idx.className = 'idx';
         idx.textContent = (i + 1).toString();
-        idx.style.cursor = 'pointer';
-        idx.title = 'کلیک برای حذف';
-        idx.onclick = () => {
-            STATE.extraLines.splice(i, 1);
-            renderExtraLinesList();
-            redrawCanvas();
-            updateExtraStatus();
-        };
 
         const input = document.createElement('input');
         input.type = 'number';
@@ -869,9 +857,9 @@ async function runExtraction() {
         const vLines = STATE.lines.filter(l => l.type === 'vertical').sort((a,b) => a.x - b.x);
         const hLines = STATE.lines.filter(l => l.type === 'horizontal').sort((a,b) => a.y - b.y);
 
-        // آماده‌سازی نقاط مرجع X برای Least Squares
+        // نقاط مرجع X اضافی
         const extra_refs = STATE.extraLines
-            .filter(l => l.freq !== null)
+            .filter(l => l.freq !== null && !isNaN(l.freq))
             .map(l => ({ x: l.x, freq: l.freq }));
 
         const calib = {
@@ -985,7 +973,6 @@ function downloadExcel() {
     XLSX.writeFile(wb, 'vna_curve.xlsx');
 }
 
-// مقداردهی اولیه
 updateExtraStatus();
 </script>
 
