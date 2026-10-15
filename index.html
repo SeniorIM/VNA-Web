@@ -4,9 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VNA Curve Extractor</title>
+
+    <!-- حذف خطای favicon -->
+    <link rel="icon" href="data:,">
+
+    <!-- PyScript لوکال (نسخه آفلاین 2026.7.3) -->
     <link rel="stylesheet" href="./libs/pyscript/core.css">
     <script type="module" src="./libs/pyscript/core.js"></script>
-    <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+
+    <!-- SheetJS لوکال (برای دانلود Excel) -->
+    <script src="./libs/xlsx.full.min.js"></script>
+
     <style>
         * { box-sizing: border-box; }
         body {
@@ -92,10 +100,6 @@
         #globalStatus.ready { color: #4caf50; background: #1a3a1a; }
         #globalStatus.error { color: #f44336; background: #3a1a1a; }
 
-        /* === پیش‌نمایش تصویر نهایی پس از adjustment === */
-        #previewAdjust {
-            width: 100%; border-radius: 8px; margin-top: 8px; display: none;
-        }
         details { margin-top: 6px; }
         summary { cursor: pointer; color: #4fc3f7; font-size: 12px; padding: 4px; }
     </style>
@@ -166,7 +170,7 @@
         <div><label>Y2 (dB)</label><input type="number" id="d2" value="-30" step="any"></div>
     </div>
 
-    <!-- ==== جدید: انتخاب گام dB ==== -->
+    <!-- انتخاب گام dB -->
     <div style="margin-top:10px;">
         <label style="font-size:12px; color:#aaa; display:block; margin-bottom:4px;">
             گام خطوط افقی محور عمودی (dB):
@@ -200,7 +204,6 @@
 //   پنل وضعیت کتابخانه‌ها
 // ============================================================
 const LIB_TOTAL = 6;
-let libDone = 0;
 
 function updateLibStatus(name, state, msg) {
     const el = document.querySelector(`.lib-item[data-lib="${name}"]`);
@@ -211,7 +214,7 @@ function updateLibStatus(name, state, msg) {
         el.innerHTML = `<span class="lib-dot"></span>${msg}`;
     }
     if (state === 'ok') {
-        libDone = document.querySelectorAll('.lib-item.ok').length;
+        const libDone = document.querySelectorAll('.lib-item.ok').length;
         document.getElementById('libProgress').textContent = `${libDone}/${LIB_TOTAL}`;
         if (libDone >= LIB_TOTAL) {
             const g = document.getElementById('globalStatus');
@@ -228,8 +231,6 @@ function updateLibStatus(name, state, msg) {
 
 // پل ارتباطی بین Python و JS
 window.updateLibStatus = updateLibStatus;
-
-// علامت‌گذاری شروع
 window.markLibLoading = (name) => updateLibStatus(name, 'loading', name + '...');
 window.markLibOk = (name) => updateLibStatus(name, 'ok', name + ' ✅');
 window.markLibError = (name) => updateLibStatus(name, 'error', name + ' ❌');
@@ -246,32 +247,26 @@ function applyAdjustments(img, adj) {
     const imgData = ctx.getImageData(0, 0, c.width, c.height);
     const d = imgData.data;
 
-    // نرمال‌سازی مقادیر: -100..100 → ضرایب
-    const brightness = adj.brightness / 100;       // -1..1
-    const exposure   = Math.pow(2, adj.exposure / 100); // 0.5..2
-    const contrastF  = 1 + adj.contrast / 100;     // 0..2
-    const highlights = adj.highlights / 100;       // 0..1 (100 → 1)
-    const shadows    = adj.shadows / 100;          // 0..1
-    const saturation = 1 + adj.saturation / 100;   // 0..2
+    const brightness = adj.brightness / 100;
+    const exposure   = Math.pow(2, adj.exposure / 100);
+    const contrastF  = 1 + adj.contrast / 100;
+    const highlights = adj.highlights / 100;
+    const shadows    = adj.shadows / 100;
+    const saturation = 1 + adj.saturation / 100;
 
-    // ====== Pass 1: Brightness + Exposure + Contrast + Highlights/Shadows + Saturation ======
+    // Pass 1
     for (let i = 0; i < d.length; i += 4) {
         let r = d[i], g = d[i+1], b = d[i+2];
 
-        // Exposure (ضرب نمایی)
         r *= exposure; g *= exposure; b *= exposure;
-
-        // Brightness (جمع)
         r += brightness * 255; g += brightness * 255; b += brightness * 255;
 
-        // Highlights: کاهش/افزایش نواحی روشن
         if (highlights !== 1) {
             const lum = 0.299*r + 0.587*g + 0.114*b;
             const t = Math.min(1, lum / 255);
             const factor = 1 - highlights * t * 0.5;
             r *= factor; g *= factor; b *= factor;
         }
-        // Shadows: افزایش/کاهش نواحی تاریک
         if (shadows !== 1) {
             const lum = 0.299*r + 0.587*g + 0.114*b;
             const t = 1 - Math.min(1, lum / 255);
@@ -279,12 +274,10 @@ function applyAdjustments(img, adj) {
             r += add; g += add; b += add;
         }
 
-        // Contrast حول نقطه 128
         r = (r - 128) * contrastF + 128;
         g = (g - 128) * contrastF + 128;
         b = (b - 128) * contrastF + 128;
 
-        // Saturation
         const gray = 0.299*r + 0.587*g + 0.114*b;
         r = gray + (r - gray) * saturation;
         g = gray + (g - gray) * saturation;
@@ -296,13 +289,12 @@ function applyAdjustments(img, adj) {
     }
     ctx.putImageData(imgData, 0, 0);
 
-    // ====== Pass 2: Sharpness (unsharp mask) ======
-    const sharpAmount = adj.sharpness / 100; // 0..0.5
+    // Pass 2: Sharpness
+    const sharpAmount = adj.sharpness / 100;
     if (sharpAmount > 0.01) {
         const w = c.width, h = c.height;
         const src = ctx.getImageData(0, 0, w, h).data;
         const blurred = new Uint8ClampedArray(src.length);
-        // blur 3x3 box
         for (let y = 0; y < h; y++) {
             for (let x = 0; x < w; x++) {
                 let rr=0, gg=0, bb=0, cnt=0;
@@ -336,8 +328,8 @@ function applyAdjustments(img, adj) {
 //   STATE
 // ============================================================
 const STATE = {
-    image: null,           // تصویر اصلی (خام)
-    imageAdjusted: null,   // تصویر پس از adjustment (canvas)
+    image: null,
+    imageAdjusted: null,
     imageWidth: 0, imageHeight: 0,
     clickStep: 0, corners: [], xPoints: [], yPoints: [],
     allClicks: [], result: null,
@@ -372,7 +364,6 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
             window.imageWidth = img.width;
             window.imageHeight = img.height;
 
-            // اعمال adjustment اولیه با مقادیر پیش‌فرض
             readAdjValuesFromUI();
             applyAdjustAndReload(true);
         };
@@ -531,11 +522,10 @@ async function runExtraction() {
             d1: parseFloat(document.getElementById('d1').value),
             y2: STATE.yPoints[1].y,
             d2: parseFloat(document.getElementById('d2').value),
-            db_step: parseFloat(document.getElementById('dbStep').value) // ← جدید
+            db_step: parseFloat(document.getElementById('dbStep').value)
         };
         const imgArray = await imageToArray(STATE.imageAdjusted);
 
-        // ===== فراخوانی تابع پایتون =====
         let resultRaw = await window.process_image(imgArray, corners, calib);
 
         let result;
@@ -557,7 +547,6 @@ async function runExtraction() {
     document.getElementById('extractBtn').disabled = false;
 }
 
-// تبدیل canvas به آرایه Uint8 RGB
 function imageToArray(imgOrCanvas) {
     return new Promise((resolve) => {
         const canvas = document.createElement('canvas');
@@ -626,7 +615,8 @@ function downloadExcel() {
 }
 </script>
 
-<script type="py" src="./main.py" async></script>
+<!-- اسکریپت پایتون با config صریح -->
+<script type="py" src="./main.py" config="./pyscript.toml"></script>
 
 </body>
 </html>
