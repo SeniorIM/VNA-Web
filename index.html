@@ -4,15 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VNA Curve Extractor</title>
-
-    <!-- حذف خطای favicon -->
     <link rel="icon" href="data:,">
 
-    <!-- PyScript لوکال (نسخه آفلاین 2026.7.3) -->
+    <!-- PyScript لوکال -->
     <link rel="stylesheet" href="./libs/pyscript/core.css">
     <script type="module" src="./libs/pyscript/core.js"></script>
 
-    <!-- SheetJS لوکال (برای دانلود Excel) -->
+    <!-- SheetJS لوکال -->
     <script src="./libs/xlsx.full.min.js"></script>
 
     <style>
@@ -56,14 +54,10 @@
         }
         #plotCanvas { width: 100%; background: #fff; border-radius: 8px; display: block; }
 
-        /* === پنل وضعیت کتابخانه‌ها === */
         #libStatusPanel {
-            background: #0d1b2a;
-            border: 1px solid #1b4965;
-            border-radius: 8px;
-            padding: 10px;
-            margin-bottom: 10px;
-            font-size: 12px;
+            background: #0d1b2a; border: 1px solid #1b4965;
+            border-radius: 8px; padding: 10px;
+            margin-bottom: 10px; font-size: 12px;
         }
         #libStatusPanel .lib-header {
             display: flex; justify-content: space-between; align-items: center;
@@ -108,19 +102,15 @@
 
 <h1>📊 VNA Curve Extractor</h1>
 
-<!-- ============ پنل وضعیت کتابخانه‌ها ============ -->
 <div id="libStatusPanel">
     <div class="lib-header">
         <span>🔌 وضعیت کتابخانه‌ها</span>
-        <span id="libProgress">0/6</span>
+        <span id="libProgress">0/3</span>
     </div>
     <div class="lib-list" id="libList">
         <div class="lib-item pending" data-lib="pyodide"><span class="lib-dot"></span>Pyodide</div>
         <div class="lib-item pending" data-lib="numpy"><span class="lib-dot"></span>NumPy</div>
-        <div class="lib-item pending" data-lib="opencv"><span class="lib-dot"></span>OpenCV</div>
-        <div class="lib-item pending" data-lib="pandas"><span class="lib-dot"></span>Pandas</div>
-        <div class="lib-item pending" data-lib="openpyxl"><span class="lib-dot"></span>OpenPyXL</div>
-        <div class="lib-item pending" data-lib="scipy"><span class="lib-dot"></span>SciPy</div>
+        <div class="lib-item pending" data-lib="pillow"><span class="lib-dot"></span>Pillow</div>
     </div>
     <div id="globalStatus" class="waiting">⏳ در حال آماده‌سازی...</div>
 </div>
@@ -133,7 +123,6 @@
     </button>
     <div class="status" id="status1">منتظر انتخاب تصویر...</div>
 
-    <!-- تنظیمات Adjustment -->
     <details open>
         <summary>⚙️ تنظیمات تصویر (Adjustment)</summary>
         <div class="inputs" style="margin-top:6px;">
@@ -170,7 +159,6 @@
         <div><label>Y2 (dB)</label><input type="number" id="d2" value="-30" step="any"></div>
     </div>
 
-    <!-- انتخاب گام dB -->
     <div style="margin-top:10px;">
         <label style="font-size:12px; color:#aaa; display:block; margin-bottom:4px;">
             گام خطوط افقی محور عمودی (dB):
@@ -203,7 +191,7 @@
 // ============================================================
 //   پنل وضعیت کتابخانه‌ها
 // ============================================================
-const LIB_TOTAL = 6;
+const LIB_TOTAL = 3;
 
 function updateLibStatus(name, state, msg) {
     const el = document.querySelector(`.lib-item[data-lib="${name}"]`);
@@ -229,7 +217,6 @@ function updateLibStatus(name, state, msg) {
     }
 }
 
-// پل ارتباطی بین Python و JS
 window.updateLibStatus = updateLibStatus;
 window.markLibLoading = (name) => updateLibStatus(name, 'loading', name + '...');
 window.markLibOk = (name) => updateLibStatus(name, 'ok', name + ' ✅');
@@ -254,7 +241,6 @@ function applyAdjustments(img, adj) {
     const shadows    = adj.shadows / 100;
     const saturation = 1 + adj.saturation / 100;
 
-    // Pass 1
     for (let i = 0; i < d.length; i += 4) {
         let r = d[i], g = d[i+1], b = d[i+2];
 
@@ -289,7 +275,6 @@ function applyAdjustments(img, adj) {
     }
     ctx.putImageData(imgData, 0, 0);
 
-    // Pass 2: Sharpness
     const sharpAmount = adj.sharpness / 100;
     if (sharpAmount > 0.01) {
         const w = c.width, h = c.height;
@@ -615,7 +600,6 @@ function downloadExcel() {
 }
 </script>
 
-<!-- اسکریپت پایتون با config صریح -->
 <script type="py" src="./main.py" config="./pyscript.toml"></script>
 
 </body>

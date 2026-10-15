@@ -1,1 +1,1 @@
-packages = ["numpy", "opencv-python", "pandas", "openpyxl", "scipy"]
+packages = ["numpy", "pillow"]

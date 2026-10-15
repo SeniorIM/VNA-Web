@@ -1,9 +1,7 @@
 """
 استخراج دقیق منحنی S11 از عکس VNA
-نسخه نهایی وب - با JSON output و db_step
-نسخه آفلاین PyScript 2026.7.3
+نسخه بدون OpenCV - فقط با NumPy و Pillow
 """
-import pyodide_js
 from js import window
 import json
 
@@ -11,108 +9,167 @@ print(">>> main.py شروع به اجرا کرد")
 
 
 # ============================================================
+#          اطلاع‌رسانی وضعیت کتابخانه‌ها
+# ============================================================
+def _mark(name, state):
+    try:
+        if state == "ok": window.markLibOk(name)
+        elif state == "loading": window.markLibLoading(name)
+        elif state == "error": window.markLibError(name)
+    except Exception:
+        pass
+
+
+_mark("pyodide", "ok")
+
+
+# ============================================================
 #          Import کتابخانه‌ها
 # ============================================================
-# پکیج‌ها از pyscript.toml به صورت خودکار نصب می‌شن
-import numpy as np
-import cv2
+try:
+    _mark("numpy", "loading")
+    import numpy as np
+    _mark("numpy", "ok")
+    print(">>> numpy آماده ✅")
+except Exception as e:
+    _mark("numpy", "error")
+    print(f">>> خطا numpy: {e}")
+    raise
+
+try:
+    _mark("pillow", "loading")
+    from PIL import Image
+    _mark("pillow", "ok")
+    print(">>> Pillow آماده ✅")
+except Exception as e:
+    _mark("pillow", "error")
+    print(f">>> خطا Pillow: {e}")
+    raise
 
 
 # ============================================================
-#          اطلاع‌رسانی وضعیت کتابخانه‌ها به UI
-# ============================================================
-def _mark_ok(name):
-    try:
-        window.markLibOk(name)
-    except Exception:
-        pass
-
-
-def _mark_error(name):
-    try:
-        window.markLibError(name)
-    except Exception:
-        pass
-
-
-# همه پکیج‌ها در pyscript.toml تعریف شدن، پس اینجا فقط علامت OK می‌زنیم
-_mark_ok("pyodide")
-_mark_ok("numpy")
-_mark_ok("opencv")
-_mark_ok("pandas")
-_mark_ok("openpyxl")
-_mark_ok("scipy")
-print(">>> همه کتابخانه‌ها آماده هستند ✅")
-
-
-# ============================================================
-#          توابع پردازش تصویر
+#          توابع پردازش تصویر (بدون OpenCV)
 # ============================================================
 
-def perspective_rectify(image_bgr, corners):
+def numpy_to_pil(arr_rgb, w, h):
+    """تبدیل آرایه numpy (RGB) به PIL Image"""
+    return Image.frombytes("RGB", (w, h), arr_rgb.tobytes())
+
+
+def perspective_rectify_pil(pil_img, corners):
+    """
+    تصحیح پرسپکتیو با PIL
+    corners: [[tl_x, tl_y], [tr_x, tr_y], [br_x, br_y], [bl_x, bl_y]]
+    """
     tl, tr, br, bl = corners
-    width_a = np.linalg.norm(br - bl)
-    width_b = np.linalg.norm(tr - tl)
-    height_a = np.linalg.norm(tr - br)
-    height_b = np.linalg.norm(tl - bl)
-    width = max(100, int(max(width_a, width_b)))
-    height = max(100, int(max(height_a, height_b)))
-    dst = np.array([[0, 0], [width - 1, 0],
-                    [width - 1, height - 1], [0, height - 1]], dtype=np.float32)
-    matrix = cv2.getPerspectiveTransform(corners.astype(np.float32), dst)
-    # درون‌یابی مکعبی برای دقت بالاتر
-    return cv2.warpPerspective(image_bgr, matrix, (width, height),
-                                flags=cv2.INTER_CUBIC)
+    width_a = np.linalg.norm(np.array(br) - np.array(bl))
+    width_b = np.linalg.norm(np.array(tr) - np.array(tl))
+    height_a = np.linalg.norm(np.array(tr) - np.array(br))
+    height_b = np.linalg.norm(np.array(tl) - np.array(bl))
+    out_w = max(100, int(max(width_a, width_b)))
+    out_h = max(100, int(max(height_a, height_b)))
+
+    # پیدا کردن ضرایب تبدیل هوموگرافی
+    src = np.array([tl, tr, br, bl], dtype=np.float32)
+    dst = np.array([[0, 0], [out_w - 1, 0],
+                    [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=np.float32)
+
+    # حل معادله هوموگرافی 8x8
+    A = []
+    b = []
+    for i in range(4):
+        sx, sy = src[i]
+        dx, dy = dst[i]
+        A.append([sx, sy, 1, 0, 0, 0, -dx*sx, -dx*sy])
+        A.append([0, 0, 0, sx, sy, 1, -dy*sx, -dy*sy])
+        b.append(dx)
+        b.append(dy)
+    A = np.array(A, dtype=np.float64)
+    b = np.array(b, dtype=np.float64)
+    try:
+        h_coef = np.linalg.solve(A, b)
+    except np.linalg.LinAlgError:
+        h_coef, *_ = np.linalg.lstsq(A, b, rcond=None)
+    H = np.append(h_coef, 1.0).reshape(3, 3)
+
+    # برای هر پیکسل خروجی، مختصات ورودی رو حساب کن (inverse mapping)
+    u, v = np.meshgrid(np.arange(out_w), np.arange(out_h))
+    ones = np.ones_like(u)
+    coords = np.stack([u, v, ones], axis=-1).reshape(-1, 3).T  # 3xN
+
+    # H⁻¹ برای inverse mapping
+    try:
+        H_inv = np.linalg.inv(H)
+    except np.linalg.LinAlgError:
+        H_inv = H  # fallback
+
+    src_coords = H_inv @ coords  # 3xN
+    src_coords /= src_coords[2:3, :]  # نرمال‌سازی
+    xs = src_coords[0, :].reshape(out_h, out_w)
+    ys = src_coords[1, :].reshape(out_h, out_w)
+
+    xs = np.clip(xs, 0, pil_img.width - 1).astype(np.int32)
+    ys = np.clip(ys, 0, pil_img.height - 1).astype(np.int32)
+
+    arr = np.array(pil_img)  # HxWx3
+    out_arr = arr[ys, xs]     # HxWx3
+    return Image.fromarray(out_arr.astype(np.uint8), "RGB")
 
 
-def detect_yellow_trace(image_bgr):
+def detect_yellow_trace_np(rgb_arr):
     """
-    تشخیص منحنی زرد با دقت بالا:
-    - blur ملایم قبل از HSV
-    - دو بازه HSV (زرد روشن + زرد تیره)
-    - فیلتر morphologic پیشرفته
+    تشخیص منحنی زرد با NumPy (جایگزین cv2.inRange)
+    rgb_arr: HxWx3 uint8
     """
-    blurred = cv2.GaussianBlur(image_bgr, (3, 3), 0)
-    hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+    r = rgb_arr[:, :, 0].astype(np.int16)
+    g = rgb_arr[:, :, 1].astype(np.int16)
+    b = rgb_arr[:, :, 2].astype(np.int16)
 
-    # بازه اصلی زرد
-    lower1 = np.array([12, 40, 80], dtype=np.uint8)
-    upper1 = np.array([45, 255, 255], dtype=np.uint8)
-    mask1 = cv2.inRange(hsv, lower1, upper1)
+    # شرط‌های زرد بودن (R بالا، G بالا، B پایین)
+    mask = (r > 100) & (g > 80) & (b < 120) & \
+           (r > b + 30) & (g > b + 20) & \
+           (np.abs(r - g) < 80)
 
-    # بازه مکمل برای زرد کم‌رنگ
-    lower2 = np.array([20, 25, 60], dtype=np.uint8)
-    upper2 = np.array([40, 255, 255], dtype=np.uint8)
-    mask2 = cv2.inRange(hsv, lower2, upper2)
-
-    mask = cv2.bitwise_or(mask1, mask2)
-
-    # فیلتر نویز
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
-                             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2)))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE,
-                             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
-
-    # اتصال خطوط قطع‌شده افقی
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE,
-                             cv2.getStructuringElement(cv2.MORPH_RECT, (5, 1)))
-    return mask
+    return mask.astype(np.uint8)
 
 
-def remove_small_components(mask, min_width_ratio=0.02):
+def remove_small_components_np(mask, min_width_ratio=0.02):
+    """
+    حذف اجزای کوچک با NumPy (جایگزین cv2.connectedComponentsWithStats)
+    الگوریتم: BFS ساده برای هر کامپوننت
+    """
     h, w = mask.shape
-    binary = (mask > 0).astype(np.uint8)
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
-    cleaned = np.zeros_like(binary)
+    visited = np.zeros_like(mask, dtype=bool)
+    output = np.zeros_like(mask)
     min_width = max(10, int(w * min_width_ratio))
-    for label in range(1, count):
-        x, y, cw, ch, area = stats[label]
-        if cw >= min_width:
-            cleaned[labels == label] = 1
-    return cleaned
+
+    # BFS با stack
+    for y0 in range(h):
+        for x0 in range(w):
+            if mask[y0, x0] and not visited[y0, x0]:
+                # BFS
+                stack = [(y0, x0)]
+                comp = []
+                visited[y0, x0] = True
+                while stack:
+                    y, x = stack.pop()
+                    comp.append((y, x))
+                    for dy, dx in ((-1,0),(1,0),(0,-1),(0,1)):
+                        ny, nx = y+dy, x+dx
+                        if 0 <= ny < h and 0 <= nx < w:
+                            if mask[ny, nx] and not visited[ny, nx]:
+                                visited[ny, nx] = True
+                                stack.append((ny, nx))
+                # چک عرض
+                xs_comp = [p[1] for p in comp]
+                width_comp = max(xs_comp) - min(xs_comp) + 1
+                if width_comp >= min_width:
+                    for (y, x) in comp:
+                        output[y, x] = 1
+    return output
 
 
-def find_curve_center_y(cleaned):
+def find_curve_center_y_np(cleaned):
     h, w = cleaned.shape
     ys = []
     for x in range(w):
@@ -139,7 +196,7 @@ def split_groups(rows, gap=3):
     return groups
 
 
-def track_nearest(cleaned, start_y):
+def track_nearest_np(cleaned, start_y):
     h, w = cleaned.shape
     ys = np.full(w, np.nan, dtype=float)
     start_col = None
@@ -242,10 +299,6 @@ def remove_isolated_spikes(ys, h, max_jump_ratio=0.20):
 
 
 def smooth_subpixel(ys, window=5):
-    """
-    هموارسازی median سبک روی مسیر برای کاهش نویز
-    (بدون از بین بردن اسپایک‌های واقعی)
-    """
     valid = np.isfinite(ys)
     if valid.sum() < window:
         return ys
@@ -265,12 +318,12 @@ def smooth_subpixel(ys, window=5):
 
 def extract_trace(mask):
     h, w = mask.shape
-    cleaned = remove_small_components(mask, min_width_ratio=0.02)
+    cleaned = remove_small_components_np(mask, min_width_ratio=0.02)
     if cleaned.sum() < 30:
         raise RuntimeError("منحنی پیدا نشد.")
 
-    start_y = find_curve_center_y(cleaned)
-    ys_raw_full = track_nearest(cleaned, start_y)
+    start_y = find_curve_center_y_np(cleaned)
+    ys_raw_full = track_nearest_np(cleaned, start_y)
     valid_count = np.isfinite(ys_raw_full).sum()
     if valid_count < max(10, int(w * 0.3)):
         raise RuntimeError(f"ردیابی ناموفق: {valid_count} نقطه.")
@@ -280,7 +333,6 @@ def extract_trace(mask):
     x_raw = xs_arr[valid_raw]
     y_raw = ys_raw_full[valid_raw]
 
-    # بهبود دقت
     ys = fill_short_gaps(ys_raw_full, max_gap_ratio=0.03)
     ys = remove_isolated_spikes(ys, h, max_jump_ratio=0.20)
     ys = smooth_subpixel(ys, window=5)
@@ -306,14 +358,15 @@ def process_image(img_array, corners_list, calib_dict):
         print(f">>> ابعاد: {w}x{h}")
 
         img_rgb = np.frombuffer(bytes(img_array), dtype=np.uint8).reshape((h, w, 3))
-        img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-        print(">>> RGB→BGR انجام شد")
+        pil_img = numpy_to_pil(img_rgb, w, h)
+        print(">>> PIL Image ساخته شد")
 
         corners = np.array(corners_js, dtype=float)
-        rectified = perspective_rectify(img_bgr, corners)
+        rectified_pil = perspective_rectify_pil(pil_img, corners)
         print(">>> rectify انجام شد")
 
-        mask = detect_yellow_trace(rectified)
+        rectified_rgb = np.array(rectified_pil)
+        mask = detect_yellow_trace_np(rectified_rgb)
         print(f">>> mask: {np.count_nonzero(mask)} pixels")
 
         x_clean, y_clean, x_raw, y_raw = extract_trace(mask)
@@ -352,10 +405,6 @@ def process_image(img_array, corners_list, calib_dict):
         traceback.print_exc()
         raise
 
-
-# ============================================================
-#          اتصال به window
-# ============================================================
 
 window.process_image = process_image
 print(">>> process_image به window وصل شد ✅")
