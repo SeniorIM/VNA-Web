@@ -46,7 +46,7 @@
             background: #000;
             border-radius: 8px;
         }
-        #canvas { display: block; width: 100%; height: auto; }
+        #canvas { display: block; width: 100%; height: auto; cursor: crosshair; }
 
         .status {
             background: #333; padding: 10px; border-radius: 6px;
@@ -65,7 +65,6 @@
         }
         #plotCanvas { width: 100%; background: #fff; border-radius: 8px; display: block; }
 
-        /* === پنل وضعیت کتابخانه‌ها === */
         #libStatusPanel {
             background: #0d1b2a;
             border: 1px solid #1b4965;
@@ -118,7 +117,6 @@
 
 <h1>📊 VNA Curve Extractor</h1>
 
-<!-- ============ پنل وضعیت کتابخانه‌ها ============ -->
 <div id="libStatusPanel">
     <div class="lib-header">
         <span>🔌 وضعیت کتابخانه‌ها</span>
@@ -140,7 +138,6 @@
     </button>
     <div class="status" id="status1">منتظر انتخاب تصویر...</div>
 
-    <!-- تنظیمات Adjustment -->
     <details open>
         <summary>⚙️ تنظیمات تصویر (Adjustment)</summary>
         <div class="inputs" style="margin-top:8px;">
@@ -159,22 +156,23 @@
 </div>
 
 <div class="card" id="clickCard" style="display:none">
-    <h2>مرحله 2: کلیک روی نقاط</h2>
+    <h2>مرحله 2: رسم ۵ خط راهنما</h2>
     <div class="canvas-wrap"><canvas id="canvas"></canvas></div>
     <div id="stepInfo">آماده</div>
     <div style="display:flex; gap:8px; margin-top:8px;">
-        <button class="btn btn-warning" onclick="undoLastPoint()" style="flex:1">↩️ لغو</button>
-        <button class="btn btn-danger" onclick="resetClicks()" style="flex:1">🔄 شروع مجدد</button>
+        <button class="btn btn-warning" onclick="undoLastLine()" style="flex:1">↩️ لغو</button>
+        <button class="btn btn-danger" onclick="resetLines()" style="flex:1">🔄 شروع مجدد</button>
     </div>
 </div>
 
 <div class="card" id="valuesCard" style="display:none">
     <h2>مرحله 3: مقادیر محورها</h2>
     <div class="inputs">
-        <div><label>X1 (GHz)</label><input type="number" id="f1" value="8" step="any"></div>
-        <div><label>X2 (GHz)</label><input type="number" id="f2" value="12" step="any"></div>
-        <div><label>Y1 (dB)</label><input type="number" id="d1" value="0" step="any"></div>
-        <div><label>Y2 (dB)</label><input type="number" id="d2" value="-30" step="any"></div>
+        <div><label>X1 (GHz) - خط عمودی چپ</label><input type="number" id="f1" value="8" step="any"></div>
+        <div><label>X2 (GHz) - خط عمودی راست</label><input type="number" id="f2" value="12" step="any"></div>
+        <div><label>Y_top (dB) - خط افقی بالا</label><input type="number" id="d_top" value="0" step="any"></div>
+        <div><label>Y_mid (dB) - خط افقی وسط</label><input type="number" id="d_mid" value="-30" step="any"></div>
+        <div><label>Y_bot (dB) - خط افقی پایین</label><input type="number" id="d_bot" value="-60" step="any"></div>
     </div>
 
     <div style="margin-top:12px;">
@@ -216,9 +214,7 @@ function updateLibStatus(name, state, msg) {
     if (!el) return;
     el.classList.remove('pending', 'loading', 'ok', 'error');
     el.classList.add(state);
-    if (msg) {
-        el.innerHTML = `<span class="lib-dot"></span>${msg}`;
-    }
+    if (msg) el.innerHTML = `<span class="lib-dot"></span>${msg}`;
     if (state === 'ok') {
         const libDone = document.querySelectorAll('.lib-item.ok').length;
         document.getElementById('libProgress').textContent = `${libDone}/${LIB_TOTAL}`;
@@ -261,7 +257,6 @@ function applyAdjustments(imgOrCanvas, adj) {
 
     for (let i = 0; i < d.length; i += 4) {
         let r = d[i], g = d[i+1], b = d[i+2];
-
         r *= exposure; g *= exposure; b *= exposure;
         r += brightness * 255; g += brightness * 255; b += brightness * 255;
 
@@ -334,22 +329,25 @@ const STATE = {
     image: null,
     imageAdjusted: null,
     imageWidth: 0, imageHeight: 0,
-    clickStep: 0, corners: [], xPoints: [], yPoints: [],
-    allClicks: [], result: null,
-    adjValues: { brightness:-100, exposure:100, contrast:100, highlights:100, shadows:100, saturation:100, sharpness:50 }
+    lineStep: 0,           // شماره خط فعلی (0 تا 5)
+    lines: [],             // خطوط کشیده شده
+    allLines: [],          // برای Undo
+    result: null,
+    adjValues: {}
 };
 
-const STEPS_TEXT = [
+// ترتیب خطوط: 1=عمودی چپ, 2=عمودی راست, 3=افقی بالا, 4=افقی وسط, 5=افقی پایین
+const LINE_STEPS_TEXT = [
     'آماده',
-    'گوشه بالا-چپ نمودار',
-    'گوشه بالا-راست نمودار',
-    'گوشه پایین-راست نمودار',
-    'گوشه پایین-چپ نمودار',
-    'روی 8 GHz کلیک کنید',
-    'روی 12 GHz کلیک کنید',
-    'روی 0 dB کلیک کنید',
-    'روی -30 dB کلیک کنید',
+    'خط عمودی سمت چپ نمودار (شروع فرکانس)',
+    'خط عمودی سمت راست نمودار (پایان فرکانس)',
+    'خط افقی بالای نمودار (Y_top)',
+    'خط افقی وسط نمودار (Y_mid)',
+    'خط افقی پایین نمودار (Y_bot)',
 ];
+
+const LINE_COLORS = ['#ff0000', '#00ff00', '#ff00ff', '#00ffff', '#ffff00'];
+const LINE_LABELS = ['V1', 'V2', 'H1', 'H2', 'H3'];
 
 // ============================================================
 //   بارگذاری فایل
@@ -364,7 +362,6 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
             STATE.image = img;
             STATE.imageWidth = img.width;
             STATE.imageHeight = img.height;
-
             readAdjValuesFromUI();
             applyAdjustAndReload(true);
         };
@@ -385,9 +382,6 @@ function readAdjValuesFromUI() {
     };
 }
 
-// ============================================================
-//   رزایز + Adjustment
-// ============================================================
 function applyAdjustAndReload(silent) {
     if (!STATE.image) {
         if (!silent) alert('اول یک تصویر انتخاب کنید.');
@@ -395,22 +389,16 @@ function applyAdjustAndReload(silent) {
     }
     readAdjValuesFromUI();
 
-    // ===== رزایز تصویر به حداکثر عرض ۱۲۰۰ پیکسل =====
-    // ۱۲۰۰ انتخاب شد چون:
-    // - دقت استخراج بالاست (پیکسل‌های کافی برای تشخیص منحنی)
-    // - حجم صفحه معقول می‌مونه
+    // رزایز به حداکثر عرض ۱۲۰۰
     const MAX_WIDTH = 1200;
-    let srcW = STATE.image.width;
-    let srcH = STATE.image.height;
+    let srcW = STATE.image.width, srcH = STATE.image.height;
     let dstW = srcW, dstH = srcH;
-
     if (srcW > MAX_WIDTH) {
         const ratio = MAX_WIDTH / srcW;
         dstW = MAX_WIDTH;
         dstH = Math.round(srcH * ratio);
     }
 
-    // ساخت canvas موقت برای رزایز
     const resizeCanvas = document.createElement('canvas');
     resizeCanvas.width = dstW;
     resizeCanvas.height = dstH;
@@ -419,121 +407,129 @@ function applyAdjustAndReload(silent) {
     resizeCtx.imageSmoothingQuality = 'high';
     resizeCtx.drawImage(STATE.image, 0, 0, dstW, dstH);
 
-    // اعمال Adjustment روی تصویر رزایز شده
     STATE.imageAdjusted = applyAdjustments(resizeCanvas, STATE.adjValues);
 
-    // نمایش روی canvas اصلی
     const canvas = document.getElementById('canvas');
     canvas.width = STATE.imageAdjusted.width;
     canvas.height = STATE.imageAdjusted.height;
     canvas.getContext('2d').drawImage(STATE.imageAdjusted, 0, 0);
 
-    // به‌روزرسانی ابعاد برای پایتون
     STATE.imageWidth = STATE.imageAdjusted.width;
     STATE.imageHeight = STATE.imageAdjusted.height;
     window.imageWidth = STATE.imageAdjusted.width;
     window.imageHeight = STATE.imageAdjusted.height;
 
-    STATE.clickStep = 1;
-    STATE.corners = []; STATE.xPoints = []; STATE.yPoints = [];
-    STATE.allClicks = [];
+    STATE.lineStep = 1;
+    STATE.lines = []; STATE.allLines = [];
 
     document.getElementById('clickCard').style.display = 'block';
     document.getElementById('valuesCard').style.display = 'none';
     document.getElementById('resultCard').style.display = 'none';
     document.getElementById('status1').textContent =
-        `✅ ${STATE.imageAdjusted.width}×${STATE.imageAdjusted.height} (رزایز + Adjustment)`;
-    document.getElementById('stepInfo').textContent = STEPS_TEXT[1];
+        `✅ ${STATE.imageAdjusted.width}×${STATE.imageAdjusted.height}`;
+    document.getElementById('stepInfo').textContent = LINE_STEPS_TEXT[1];
 }
 
 // ============================================================
-//   کلیک روی canvas
+//   رسم خطوط روی canvas
 // ============================================================
 document.getElementById('canvas').addEventListener('click', function(e) {
-    if (STATE.clickStep < 1) return;
+    if (STATE.lineStep < 1 || STATE.lineStep > 5) return;
     const canvas = document.getElementById('canvas');
     const rect = canvas.getBoundingClientRect();
     const x = (e.clientX - rect.left) * canvas.width / rect.width;
     const y = (e.clientY - rect.top) * canvas.height / rect.height;
-    handleClick(x, y);
+    handleLineClick(x, y);
 });
 
-function handleClick(x, y) {
-    const step = STATE.clickStep;
-    STATE.allClicks.push({x, y, step});
-    let color = 'red', label = '';
-    if (step >= 1 && step <= 4) {
-        STATE.corners.push({x, y});
-        color = ['red', 'green', 'blue', 'orange'][step - 1];
-        label = ['TL', 'TR', 'BR', 'BL'][step - 1];
-    } else if (step === 5 || step === 6) {
-        STATE.xPoints.push({x, y});
-        color = 'magenta';
-        label = step === 5 ? 'X1' : 'X2';
-    } else if (step === 7 || step === 8) {
-        STATE.yPoints.push({x, y});
-        color = 'cyan';
-        label = step === 7 ? 'Y1' : 'Y2';
+function handleLineClick(x, y) {
+    const step = STATE.lineStep;  // 1 تا 5
+    const type = (step <= 2) ? 'vertical' : 'horizontal';
+    // برای خط عمودی فقط x مهمه، برای افقی فقط y
+    const line = {
+        type: type,
+        x: x,
+        y: y,
+        step: step,
+        color: LINE_COLORS[step - 1],
+        label: LINE_LABELS[step - 1]
+    };
+    STATE.lines.push(line);
+    STATE.allLines.push(line);
+
+    // رسم خط روی canvas
+    drawLine(line);
+
+    STATE.lineStep++;
+    if (STATE.lineStep <= 5) {
+        document.getElementById('stepInfo').textContent = LINE_STEPS_TEXT[STATE.lineStep];
     }
-    drawMarker(x, y, color, label);
-    STATE.clickStep++;
-    if (STATE.clickStep <= 8) {
-        document.getElementById('stepInfo').textContent = STEPS_TEXT[STATE.clickStep];
-    }
-    if (STATE.clickStep === 7) {
+    if (STATE.lineStep === 3) {
+        // بعد از دو خط عمودی، مقادیر X رو نشون بده
         document.getElementById('valuesCard').style.display = 'block';
     }
-    if (STATE.clickStep === 9) {
-        document.getElementById('stepInfo').textContent = '✅ همه نقاط آماده!';
+    if (STATE.lineStep === 6) {
+        document.getElementById('stepInfo').textContent = '✅ همه خطوط رسم شدند!';
     }
 }
 
-function drawMarker(x, y, color, label) {
+function drawLine(line) {
     const ctx = document.getElementById('canvas').getContext('2d');
+    const canvas = document.getElementById('canvas');
+    ctx.strokeStyle = line.color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 4]);
     ctx.beginPath();
-    ctx.arc(x, y, 7, 0, 2 * Math.PI);
-    ctx.fillStyle = color; ctx.fill();
-    ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke();
-    if (label) {
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 14px Arial';
+    if (line.type === 'vertical') {
+        ctx.moveTo(line.x, 0);
+        ctx.lineTo(line.x, canvas.height);
+    } else {
+        ctx.moveTo(0, line.y);
+        ctx.lineTo(canvas.width, line.y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // برچسب
+    ctx.fillStyle = line.color;
+    ctx.font = 'bold 16px Arial';
+    if (line.type === 'vertical') {
         ctx.textAlign = 'center';
-        ctx.fillText(label, x, y + 5);
+        ctx.fillText(line.label, line.x, 20);
+    } else {
+        ctx.textAlign = 'left';
+        ctx.fillText(line.label, 10, line.y - 5);
     }
 }
 
-function undoLastPoint() {
-    if (STATE.allClicks.length === 0) return;
-    const last = STATE.allClicks.pop();
-    STATE.clickStep = last.step;
-    if (last.step >= 1 && last.step <= 4) STATE.corners.pop();
-    else if (last.step === 5 || last.step === 6) STATE.xPoints.pop();
-    else if (last.step === 7 || last.step === 8) STATE.yPoints.pop();
+function undoLastLine() {
+    if (STATE.allLines.length === 0) return;
+    const last = STATE.allLines.pop();
+    STATE.lineStep = last.step;
+    // حذف از STATE.lines
+    for (let i = STATE.lines.length - 1; i >= 0; i--) {
+        if (STATE.lines[i].step === last.step) {
+            STATE.lines.splice(i, 1);
+            break;
+        }
+    }
+    // بازترسیم
     const canvas = document.getElementById('canvas');
     canvas.getContext('2d').drawImage(STATE.imageAdjusted, 0, 0);
-    redrawAllMarkers();
-}
+    for (const line of STATE.lines) drawLine(line);
 
-function redrawAllMarkers() {
-    for (let i = 0; i < STATE.corners.length; i++) {
-        const c = STATE.corners[i];
-        drawMarker(c.x, c.y, ['red','green','blue','orange'][i], ['TL','TR','BR','BL'][i]);
-    }
-    for (let i = 0; i < STATE.xPoints.length; i++) {
-        const p = STATE.xPoints[i];
-        drawMarker(p.x, p.y, 'magenta', i === 0 ? 'X1' : 'X2');
-    }
-    for (let i = 0; i < STATE.yPoints.length; i++) {
-        const p = STATE.yPoints[i];
-        drawMarker(p.x, p.y, 'cyan', i === 0 ? 'Y1' : 'Y2');
+    document.getElementById('stepInfo').textContent = LINE_STEPS_TEXT[STATE.lineStep];
+    if (STATE.lineStep < 3) {
+        document.getElementById('valuesCard').style.display = 'none';
     }
 }
 
-function resetClicks() {
-    STATE.clickStep = 1;
-    STATE.corners = []; STATE.xPoints = []; STATE.yPoints = []; STATE.allClicks = [];
-    document.getElementById('canvas').getContext('2d').drawImage(STATE.imageAdjusted, 0, 0);
-    document.getElementById('stepInfo').textContent = STEPS_TEXT[1];
+function resetLines() {
+    STATE.lineStep = 1;
+    STATE.lines = []; STATE.allLines = [];
+    const canvas = document.getElementById('canvas');
+    canvas.getContext('2d').drawImage(STATE.imageAdjusted, 0, 0);
+    document.getElementById('stepInfo').textContent = LINE_STEPS_TEXT[1];
     document.getElementById('valuesCard').style.display = 'none';
     document.getElementById('resultCard').style.display = 'none';
 }
@@ -542,29 +538,48 @@ function resetClicks() {
 //   استخراج
 // ============================================================
 async function runExtraction() {
+    if (STATE.lines.length < 5) {
+        document.getElementById('status3').textContent = '❌ ابتدا ۵ خط را رسم کنید';
+        return;
+    }
     if (typeof window.process_image !== 'function') {
-        document.getElementById('status3').textContent =
-            '⏳ لطفاً صبر کنید (نصب پکیج‌ها)';
+        document.getElementById('status3').textContent = '⏳ لطفاً صبر کنید (نصب پکیج‌ها)';
         return;
     }
 
     document.getElementById('status3').textContent = '⏳ در حال استخراج...';
     document.getElementById('extractBtn').disabled = true;
     try {
-        const corners = STATE.corners.map(p => [p.x, p.y]);
+        // ساخت کالیبراسیون از ۵ خط
+        const vLines = STATE.lines.filter(l => l.type === 'vertical').sort((a,b) => a.x - b.x);
+        const hLines = STATE.lines.filter(l => l.type === 'horizontal').sort((a,b) => a.y - b.y);
+
         const calib = {
-            x1: STATE.xPoints[0].x,
+            // خطوط عمودی: x1 چپ، x2 راست
+            x1: vLines[0].x,
             f1: parseFloat(document.getElementById('f1').value),
-            x2: STATE.xPoints[1].x,
+            x2: vLines[1].x,
             f2: parseFloat(document.getElementById('f2').value),
-            y1: STATE.yPoints[0].y,
-            d1: parseFloat(document.getElementById('d1').value),
-            y2: STATE.yPoints[1].y,
-            d2: parseFloat(document.getElementById('d2').value),
+            // خطوط افقی: بالا، وسط، پایین
+            y_top: hLines[0].y,
+            d_top: parseFloat(document.getElementById('d_top').value),
+            y_mid: hLines[1].y,
+            d_mid: parseFloat(document.getElementById('d_mid').value),
+            y_bot: hLines[2].y,
+            d_bot: parseFloat(document.getElementById('d_bot').value),
             db_step: parseFloat(document.getElementById('dbStep').value)
         };
-        const imgArray = await imageToArray(STATE.imageAdjusted);
 
+        // گوشه‌ها از تقاطع خطوط
+        // TL = (x1, y_top), TR = (x2, y_top), BR = (x2, y_bot), BL = (x1, y_bot)
+        const corners = [
+            [vLines[0].x, hLines[0].y],  // TL
+            [vLines[1].x, hLines[0].y],  // TR
+            [vLines[1].x, hLines[2].y],  // BR
+            [vLines[0].x, hLines[2].y],  // BL
+        ];
+
+        const imgArray = await imageToArray(STATE.imageAdjusted);
         let resultRaw = await window.process_image(imgArray, corners, calib);
 
         let result;
@@ -607,8 +622,7 @@ function imageToArray(imgOrCanvas) {
 
 function showResult(result) {
     document.getElementById('resultCard').style.display = 'block';
-    document.getElementById('status4').textContent =
-        `${result.frequency.length} نقطه`;
+    document.getElementById('status4').textContent = `${result.frequency.length} نقطه`;
     const canvas = document.getElementById('plotCanvas');
     const ctx = canvas.getContext('2d');
     const W = canvas.width, H = canvas.height, pad = 60;

@@ -1,6 +1,6 @@
 """
 استخراج دقیق منحنی S11 از عکس VNA
-نسخه بدون OpenCV - فقط با NumPy و Pillow
+نسخه با کالیبراسیون ۵ خطی (Y_top, Y_mid, Y_bot)
 """
 from js import window
 import json
@@ -8,9 +8,6 @@ import json
 print(">>> main.py شروع به اجرا کرد")
 
 
-# ============================================================
-#          اطلاع‌رسانی وضعیت کتابخانه‌ها
-# ============================================================
 def _mark(name, state):
     try:
         if state == "ok": window.markLibOk(name)
@@ -48,19 +45,14 @@ except Exception as e:
 
 
 # ============================================================
-#          توابع پردازش تصویر (بدون OpenCV)
+#          توابع کمکی
 # ============================================================
 
 def numpy_to_pil(arr_rgb, w, h):
-    """تبدیل آرایه numpy (RGB) به PIL Image"""
     return Image.frombytes("RGB", (w, h), arr_rgb.tobytes())
 
 
 def perspective_rectify_pil(pil_img, corners):
-    """
-    تصحیح پرسپکتیو با PIL
-    corners: [[tl_x, tl_y], [tr_x, tr_y], [br_x, br_y], [bl_x, bl_y]]
-    """
     tl, tr, br, bl = corners
     width_a = np.linalg.norm(np.array(br) - np.array(bl))
     width_b = np.linalg.norm(np.array(tr) - np.array(tl))
@@ -69,12 +61,10 @@ def perspective_rectify_pil(pil_img, corners):
     out_w = max(100, int(max(width_a, width_b)))
     out_h = max(100, int(max(height_a, height_b)))
 
-    # پیدا کردن ضرایب تبدیل هوموگرافی
     src = np.array([tl, tr, br, bl], dtype=np.float32)
     dst = np.array([[0, 0], [out_w - 1, 0],
                     [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=np.float32)
 
-    # حل معادله هوموگرافی 8x8
     A = []
     b = []
     for i in range(4):
@@ -92,62 +82,47 @@ def perspective_rectify_pil(pil_img, corners):
         h_coef, *_ = np.linalg.lstsq(A, b, rcond=None)
     H = np.append(h_coef, 1.0).reshape(3, 3)
 
-    # برای هر پیکسل خروجی، مختصات ورودی رو حساب کن (inverse mapping)
     u, v = np.meshgrid(np.arange(out_w), np.arange(out_h))
     ones = np.ones_like(u)
-    coords = np.stack([u, v, ones], axis=-1).reshape(-1, 3).T  # 3xN
+    coords = np.stack([u, v, ones], axis=-1).reshape(-1, 3).T
 
-    # H⁻¹ برای inverse mapping
     try:
         H_inv = np.linalg.inv(H)
     except np.linalg.LinAlgError:
-        H_inv = H  # fallback
+        H_inv = H
 
-    src_coords = H_inv @ coords  # 3xN
-    src_coords /= src_coords[2:3, :]  # نرمال‌سازی
+    src_coords = H_inv @ coords
+    src_coords /= src_coords[2:3, :]
     xs = src_coords[0, :].reshape(out_h, out_w)
     ys = src_coords[1, :].reshape(out_h, out_w)
 
     xs = np.clip(xs, 0, pil_img.width - 1).astype(np.int32)
     ys = np.clip(ys, 0, pil_img.height - 1).astype(np.int32)
 
-    arr = np.array(pil_img)  # HxWx3
-    out_arr = arr[ys, xs]     # HxWx3
+    arr = np.array(pil_img)
+    out_arr = arr[ys, xs]
     return Image.fromarray(out_arr.astype(np.uint8), "RGB")
 
 
 def detect_yellow_trace_np(rgb_arr):
-    """
-    تشخیص منحنی زرد با NumPy (جایگزین cv2.inRange)
-    rgb_arr: HxWx3 uint8
-    """
     r = rgb_arr[:, :, 0].astype(np.int16)
     g = rgb_arr[:, :, 1].astype(np.int16)
     b = rgb_arr[:, :, 2].astype(np.int16)
-
-    # شرط‌های زرد بودن (R بالا، G بالا، B پایین)
     mask = (r > 100) & (g > 80) & (b < 120) & \
            (r > b + 30) & (g > b + 20) & \
            (np.abs(r - g) < 80)
-
     return mask.astype(np.uint8)
 
 
 def remove_small_components_np(mask, min_width_ratio=0.02):
-    """
-    حذف اجزای کوچک با NumPy (جایگزین cv2.connectedComponentsWithStats)
-    الگوریتم: BFS ساده برای هر کامپوننت
-    """
     h, w = mask.shape
     visited = np.zeros_like(mask, dtype=bool)
     output = np.zeros_like(mask)
     min_width = max(10, int(w * min_width_ratio))
 
-    # BFS با stack
     for y0 in range(h):
         for x0 in range(w):
             if mask[y0, x0] and not visited[y0, x0]:
-                # BFS
                 stack = [(y0, x0)]
                 comp = []
                 visited[y0, x0] = True
@@ -160,7 +135,6 @@ def remove_small_components_np(mask, min_width_ratio=0.02):
                             if mask[ny, nx] and not visited[ny, nx]:
                                 visited[ny, nx] = True
                                 stack.append((ny, nx))
-                # چک عرض
                 xs_comp = [p[1] for p in comp]
                 width_comp = max(xs_comp) - min(xs_comp) + 1
                 if width_comp >= min_width:
@@ -359,7 +333,6 @@ def process_image(img_array, corners_list, calib_dict):
 
         img_rgb = np.frombuffer(bytes(img_array), dtype=np.uint8).reshape((h, w, 3))
         pil_img = numpy_to_pil(img_rgb, w, h)
-        print(">>> PIL Image ساخته شد")
 
         corners = np.array(corners_js, dtype=float)
         rectified_pil = perspective_rectify_pil(pil_img, corners)
@@ -372,16 +345,46 @@ def process_image(img_array, corners_list, calib_dict):
         x_clean, y_clean, x_raw, y_raw = extract_trace(mask)
         print(f">>> استخراج: {len(x_clean)} نقطه")
 
+        # ===== کالیبراسیون X =====
         x1 = calib['x1']; f1 = calib['f1']
         x2 = calib['x2']; f2 = calib['f2']
-        y1 = calib['y1']; d1 = calib['d1']
-        y2 = calib['y2']; d2 = calib['d2']
 
-        db_step = float(calib.get('db_step', 10))
-        print(f">>> db_step = {db_step}")
+        # ===== کالیبراسیون Y با ۳ نقطه (top, mid, bot) =====
+        # از روش کمترین مربعات خطی استفاده می‌کنیم: d = a*y + b
+        y_top = calib['y_top']; d_top = calib['d_top']
+        y_mid = calib['y_mid']; d_mid = calib['d_mid']
+        y_bot = calib['y_bot']; d_bot = calib['d_bot']
 
+        # نقاط کالیبراسیون (در فضای rectify شده، y_top=0 و y_bot=h-1)
+        # اما اینجا y_top, y_mid, y_bot در فضای تصویر اصلی هستن
+        # چون rectified از گوشه‌ها ساخته شده، باید y رو نسبت به ارتفاع rectified تبدیل کنیم
+        rect_h = rectified_pil.height
+        rect_w = rectified_pil.width
+
+        # نگاشت y از تصویر اصلی به rectified
+        # TL و BL گوشه‌ها رو داریم
+        tl_y = corners[0][1]
+        bl_y = corners[3][1]
+        # y=0 در rectified معادل tl_y در تصویر اصلی، y=rect_h-1 معادل bl_y
+        def map_y_to_rect(y_orig):
+            return (y_orig - tl_y) / (bl_y - tl_y) * (rect_h - 1)
+
+        y_top_r = map_y_to_rect(y_top)
+        y_mid_r = map_y_to_rect(y_mid)
+        y_bot_r = map_y_to_rect(y_bot)
+
+        # کمترین مربعات برای خط d = a*y_r + b
+        y_pts = np.array([y_top_r, y_mid_r, y_bot_r])
+        d_pts = np.array([d_top, d_mid, d_bot])
+        A_ls = np.vstack([y_pts, np.ones(3)]).T
+        coef, *_ = np.linalg.lstsq(A_ls, d_pts, rcond=None)
+        a_y, b_y = coef
+
+        print(f">>> کالیبراسیون Y: d = {a_y:.4f}*y + {b_y:.4f}")
+
+        # ===== تبدیل =====
         frequency = f1 + (x_clean - x1) * (f2 - f1) / (x2 - x1)
-        amplitude_db = d1 + (y_clean - y1) * (d2 - d1) / (y2 - y1)
+        amplitude_db = a_y * y_clean + b_y
 
         lo, hi = sorted((f1, f2))
         valid = (frequency >= lo) & (frequency <= hi)
@@ -395,7 +398,6 @@ def process_image(img_array, corners_list, calib_dict):
             'amplitude': amplitude_db.tolist(),
             'x_raw': x_raw.tolist(),
             'y_raw': y_raw.tolist(),
-            'db_step': db_step,
         })
         return result_json
 
