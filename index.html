@@ -34,6 +34,7 @@
         .btn-success { background: #4caf50; }
         .btn-warning { background: #ff9800; }
         .btn-danger { background: #f44336; }
+        .btn-small { padding: 8px; font-size: 14px; }
 
         .canvas-wrap {
             width: 100%;
@@ -88,6 +89,31 @@
             margin-top: 8px;
             text-align: center;
         }
+
+        .extra-line-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr 40px;
+            gap: 6px;
+            align-items: center;
+            margin-bottom: 6px;
+            padding: 6px;
+            background: #1a1a1a;
+            border-radius: 6px;
+        }
+        .extra-line-row .idx {
+            background: #ff9800; color: #000; font-weight: bold;
+            border-radius: 4px; text-align: center; padding: 8px 0;
+            font-size: 14px;
+        }
+        .extra-line-row input {
+            padding: 8px; border: 1px solid #555; border-radius: 6px;
+            background: #0d0d0d; color: #fff; text-align: center; font-size: 14px;
+            width: 100%;
+        }
+        .extra-line-row button {
+            background: #f44336; color: #fff; border: none;
+            border-radius: 6px; padding: 8px; cursor: pointer; font-size: 16px;
+        }
     </style>
 </head>
 <body>
@@ -96,6 +122,7 @@
 
 <div id="globalStatus" class="waiting">⏳ در حال آماده‌سازی...</div>
 
+<!-- ================= مرحله 1 ================= -->
 <div class="card">
     <h2>مرحله 1: انتخاب تصویر</h2>
     <input type="file" id="fileInput" accept="image/*" style="display:none">
@@ -121,6 +148,7 @@
     </details>
 </div>
 
+<!-- ================= مرحله 2 ================= -->
 <div class="card" id="clickCard" style="display:none">
     <h2>مرحله 2: رسم ۵ خط راهنما</h2>
     <div class="canvas-wrap"><canvas id="canvas"></canvas></div>
@@ -128,10 +156,10 @@
     <div class="helper-tip">💡 بعد از رسم هر خط، می‌تونی اون رو با ماوس/انگشت بگیری و جابه‌جا کنی</div>
     <div style="display:flex; gap:8px; margin-top:8px;">
         <button class="btn btn-warning" onclick="undoLastLine()" style="flex:1">↩️ لغو</button>
-        <button class="btn btn-danger" onclick="resetLines()" style="flex:1">🔄 شروع مجدد</button>
     </div>
 </div>
 
+<!-- ================= مرحله 3 ================= -->
 <div class="card" id="valuesCard" style="display:none">
     <h2>مرحله 3: مقادیر محورها</h2>
     <div class="inputs">
@@ -155,12 +183,34 @@
         </select>
     </div>
 
+    <!-- کالیبراسیون دقیق X با خطوط اضافی -->
+    <details open style="margin-top:12px; background:#1a2a3a; border-radius:8px; padding:10px;">
+        <summary style="color:#ffd54f; font-weight:bold;">
+            🎯 کالیبراسیون دقیق محور X (اختیاری - Least Squares)
+        </summary>
+        <div class="helper-tip" style="margin-top:8px;">
+            💡 برای دقت بیشتر، روی چند خط عمودی شبکه کلیک کن و مقدار GHz هر کدام را وارد کن.<br>
+            سیستم با کمترین مربعات، دقیق‌ترین نگاشت پیکسل → فرکانس را می‌سازد.
+        </div>
+
+        <div style="margin-top:10px; display:flex; gap:6px;">
+            <button class="btn btn-warning btn-small" id="addExtraBtn" onclick="startAddingExtraLine()" style="flex:1;">
+                ➕ افزودن خط عمودی مرجع
+            </button>
+        </div>
+
+        <div id="extraLinesList" style="margin-top:10px;"></div>
+
+        <div id="extraStatus" style="margin-top:8px; font-size:13px; color:#4fc3f7; text-align:center;"></div>
+    </details>
+
     <button class="btn btn-success" id="extractBtn" onclick="runExtraction()" style="margin-top:12px">
         ⚡ استخراج
     </button>
     <div class="status" id="status3"></div>
 </div>
 
+<!-- ================= مرحله 4 ================= -->
 <div class="card" id="resultCard" style="display:none">
     <h2>مرحله 4: نتیجه</h2>
     <div class="status" id="status4"></div>
@@ -298,7 +348,13 @@ const STATE = {
     dragTolerance: 15,
     mouseDown: false,
     mouseDownPos: null,
-    touchPending: null
+    touchPending: null,
+
+    // خطوط مرجع اضافی برای کالیبراسیون X
+    extraLines: [],          // [{x, freq}]
+    addingExtra: false,      // حالت انتظار برای کلیک
+    extraClickHandler: null,
+    extraCounter: 0,
 };
 
 const LINE_STEPS_TEXT = [
@@ -312,6 +368,7 @@ const LINE_STEPS_TEXT = [
 
 const LINE_COLORS = ['#ff0000', '#00ff00', '#ff00ff', '#00ffff', '#ffff00'];
 const LINE_LABELS = ['V1', 'V2', 'H1', 'H2', 'H3'];
+const EXTRA_COLOR = '#ff9800';
 
 // ============================================================
 //   بارگذاری فایل
@@ -384,6 +441,8 @@ function applyAdjustAndReload(silent) {
 
     STATE.lineStep = 1;
     STATE.lines = []; STATE.allLines = [];
+    STATE.extraLines = []; STATE.extraCounter = 0;
+    renderExtraLinesList();
 
     document.getElementById('clickCard').style.display = 'block';
     document.getElementById('valuesCard').style.display = 'none';
@@ -407,6 +466,12 @@ function findLineAt(x, y) {
             if (Math.abs(y - line.y) <= STATE.dragTolerance) return i;
         }
     }
+    // خطوط اضافی
+    for (let i = STATE.extraLines.length - 1; i >= 0; i--) {
+        if (Math.abs(x - STATE.extraLines[i].x) <= STATE.dragTolerance) {
+            return 1000 + i;
+        }
+    }
     return -1;
 }
 
@@ -424,12 +489,22 @@ canvas.addEventListener('mousedown', function(e) {
 
     const lineIdx = findLineAt(x, y);
     if (lineIdx >= 0) {
-        const line = STATE.lines[lineIdx];
-        STATE.dragging = {
-            lineIndex: lineIdx,
-            offset: line.type === 'vertical' ? (x - line.x) : (y - line.y)
-        };
-        canvas.style.cursor = line.type === 'vertical' ? 'ew-resize' : 'ns-resize';
+        if (lineIdx >= 1000) {
+            const ei = lineIdx - 1000;
+            STATE.dragging = {
+                extraIndex: ei,
+                offset: x - STATE.extraLines[ei].x,
+                type: 'vertical'
+            };
+        } else {
+            const line = STATE.lines[lineIdx];
+            STATE.dragging = {
+                lineIndex: lineIdx,
+                offset: line.type === 'vertical' ? (x - line.x) : (y - line.y),
+                type: line.type
+            };
+        }
+        canvas.style.cursor = 'ew-resize';
     }
 });
 
@@ -437,13 +512,15 @@ canvas.addEventListener('mousemove', function(e) {
     const {x, y} = getCanvasCoords(e);
 
     if (STATE.dragging) {
-        const line = STATE.lines[STATE.dragging.lineIndex];
-        if (line.type === 'vertical') {
-            line.x = x - STATE.dragging.offset;
-            line.x = Math.max(0, Math.min(canvas.width, line.x));
+        if (STATE.dragging.extraIndex !== undefined) {
+            STATE.extraLines[STATE.dragging.extraIndex].x = Math.max(0, Math.min(canvas.width, x - STATE.dragging.offset));
         } else {
-            line.y = y - STATE.dragging.offset;
-            line.y = Math.max(0, Math.min(canvas.height, line.y));
+            const line = STATE.lines[STATE.dragging.lineIndex];
+            if (line.type === 'vertical') {
+                line.x = Math.max(0, Math.min(canvas.width, x - STATE.dragging.offset));
+            } else {
+                line.y = Math.max(0, Math.min(canvas.height, y - STATE.dragging.offset));
+            }
         }
         redrawCanvas();
         return;
@@ -452,10 +529,9 @@ canvas.addEventListener('mousemove', function(e) {
     if (STATE.mouseDown) return;
     const lineIdx = findLineAt(x, y);
     if (lineIdx >= 0) {
-        const line = STATE.lines[lineIdx];
-        canvas.style.cursor = line.type === 'vertical' ? 'ew-resize' : 'ns-resize';
+        canvas.style.cursor = 'ew-resize';
     } else {
-        canvas.style.cursor = STATE.lineStep <= 5 ? 'crosshair' : 'default';
+        canvas.style.cursor = (STATE.lineStep <= 5 || STATE.addingExtra) ? 'crosshair' : 'default';
     }
 });
 
@@ -463,17 +539,26 @@ canvas.addEventListener('mouseup', function(e) {
     const wasDragging = STATE.dragging !== null;
     STATE.mouseDown = false;
 
-    if (!wasDragging && STATE.lineStep >= 1 && STATE.lineStep <= 5) {
+    if (!wasDragging) {
         const {x, y} = getCanvasCoords(e);
-        const lineIdx = findLineAt(x, y);
-        if (lineIdx < 0) {
-            handleLineClick(x, y);
+        if (STATE.addingExtra) {
+            STATE.extraLines.push({ x: x, freq: null });
+            STATE.extraCounter++;
+            STATE.addingExtra = false;
+            renderExtraLinesList();
+            redrawCanvas();
+            updateExtraStatus();
+        } else if (STATE.lineStep >= 1 && STATE.lineStep <= 5) {
+            const lineIdx = findLineAt(x, y);
+            if (lineIdx < 0) {
+                handleLineClick(x, y);
+            }
         }
     }
 
     STATE.dragging = null;
     STATE.mouseDownPos = null;
-    canvas.style.cursor = STATE.lineStep <= 5 ? 'crosshair' : 'default';
+    canvas.style.cursor = (STATE.lineStep <= 5 || STATE.addingExtra) ? 'crosshair' : 'default';
 });
 
 canvas.addEventListener('mouseleave', function() {
@@ -492,11 +577,19 @@ canvas.addEventListener('touchstart', function(e) {
     STATE.mouseDown = true;
     const lineIdx = findLineAt(x, y);
     if (lineIdx >= 0) {
-        const line = STATE.lines[lineIdx];
-        STATE.dragging = {
-            lineIndex: lineIdx,
-            offset: line.type === 'vertical' ? (x - line.x) : (y - line.y)
-        };
+        if (lineIdx >= 1000) {
+            const ei = lineIdx - 1000;
+            STATE.dragging = {
+                extraIndex: ei,
+                offset: x - STATE.extraLines[ei].x
+            };
+        } else {
+            const line = STATE.lines[lineIdx];
+            STATE.dragging = {
+                lineIndex: lineIdx,
+                offset: line.type === 'vertical' ? (x - line.x) : (y - line.y)
+            };
+        }
     } else {
         STATE.dragging = null;
         STATE.touchPending = {x, y};
@@ -512,11 +605,15 @@ canvas.addEventListener('touchmove', function(e) {
     const y = (touch.clientY - rect.top) * canvas.height / rect.height;
 
     if (STATE.dragging) {
-        const line = STATE.lines[STATE.dragging.lineIndex];
-        if (line.type === 'vertical') {
-            line.x = Math.max(0, Math.min(canvas.width, x - STATE.dragging.offset));
+        if (STATE.dragging.extraIndex !== undefined) {
+            STATE.extraLines[STATE.dragging.extraIndex].x = Math.max(0, Math.min(canvas.width, x - STATE.dragging.offset));
         } else {
-            line.y = Math.max(0, Math.min(canvas.height, y - STATE.dragging.offset));
+            const line = STATE.lines[STATE.dragging.lineIndex];
+            if (line.type === 'vertical') {
+                line.x = Math.max(0, Math.min(canvas.width, x - STATE.dragging.offset));
+            } else {
+                line.y = Math.max(0, Math.min(canvas.height, y - STATE.dragging.offset));
+            }
         }
         redrawCanvas();
     }
@@ -524,8 +621,17 @@ canvas.addEventListener('touchmove', function(e) {
 
 canvas.addEventListener('touchend', function(e) {
     e.preventDefault();
-    if (!STATE.dragging && STATE.touchPending && STATE.lineStep >= 1 && STATE.lineStep <= 5) {
-        handleLineClick(STATE.touchPending.x, STATE.touchPending.y);
+    if (!STATE.dragging && STATE.touchPending) {
+        if (STATE.addingExtra) {
+            STATE.extraLines.push({ x: STATE.touchPending.x, freq: null });
+            STATE.extraCounter++;
+            STATE.addingExtra = false;
+            renderExtraLinesList();
+            redrawCanvas();
+            updateExtraStatus();
+        } else if (STATE.lineStep >= 1 && STATE.lineStep <= 5) {
+            handleLineClick(STATE.touchPending.x, STATE.touchPending.y);
+        }
     }
     STATE.dragging = null;
     STATE.mouseDown = false;
@@ -563,6 +669,9 @@ function redrawCanvas() {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(STATE.imageAdjusted, 0, 0);
     for (const line of STATE.lines) drawLine(line);
+    for (let i = 0; i < STATE.extraLines.length; i++) {
+        drawExtraLine(STATE.extraLines[i], i);
+    }
 }
 
 function drawLine(line) {
@@ -604,7 +713,47 @@ function drawLine(line) {
     }
 }
 
+function drawExtraLine(line, index) {
+    const ctx = canvas.getContext('2d');
+    // خط پس‌زمینه تیره
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.lineWidth = 5;
+    ctx.setLineDash([4, 6]);
+    ctx.beginPath();
+    ctx.moveTo(line.x, 0);
+    ctx.lineTo(line.x, canvas.height);
+    ctx.stroke();
+
+    // خط نارنجی
+    ctx.strokeStyle = EXTRA_COLOR;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(line.x, 0);
+    ctx.lineTo(line.x, canvas.height);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // برچسب
+    const label = (index + 1).toString();
+    ctx.fillStyle = EXTRA_COLOR;
+    ctx.font = 'bold 14px Arial';
+    ctx.textAlign = 'center';
+    // پس‌زمینه برچسب
+    const tw = ctx.measureText(label).width + 8;
+    ctx.fillRect(line.x - tw/2, 25, tw, 18);
+    ctx.fillStyle = '#000';
+    ctx.fillText(label, line.x, 39);
+}
+
 function undoLastLine() {
+    // اگر خط اضافی هست، اول اون رو حذف کن
+    if (STATE.extraLines.length > 0) {
+        STATE.extraLines.pop();
+        renderExtraLinesList();
+        redrawCanvas();
+        updateExtraStatus();
+        return;
+    }
     if (STATE.allLines.length === 0) return;
     const last = STATE.allLines.pop();
     STATE.lineStep = last.step;
@@ -622,14 +771,83 @@ function undoLastLine() {
     canvas.style.cursor = STATE.lineStep <= 5 ? 'crosshair' : 'default';
 }
 
-function resetLines() {
-    STATE.lineStep = 1;
-    STATE.lines = []; STATE.allLines = [];
-    redrawCanvas();
-    document.getElementById('stepInfo').textContent = LINE_STEPS_TEXT[1];
-    document.getElementById('valuesCard').style.display = 'none';
-    document.getElementById('resultCard').style.display = 'none';
+// ============================================================
+//   خطوط مرجع اضافی (کالیبراسیون دقیق X)
+// ============================================================
+function startAddingExtraLine() {
+    if (STATE.extraLines.length >= 8) {
+        alert('حداکثر ۸ خط اضافی مجاز است.');
+        return;
+    }
+    STATE.addingExtra = true;
     canvas.style.cursor = 'crosshair';
+    updateExtraStatus();
+}
+
+function renderExtraLinesList() {
+    const list = document.getElementById('extraLinesList');
+    list.innerHTML = '';
+    STATE.extraLines.forEach((line, i) => {
+        const row = document.createElement('div');
+        row.className = 'extra-line-row';
+
+        const idx = document.createElement('div');
+        idx.className = 'idx';
+        idx.textContent = (i + 1).toString();
+        idx.style.cursor = 'pointer';
+        idx.title = 'کلیک برای حذف';
+        idx.onclick = () => {
+            STATE.extraLines.splice(i, 1);
+            renderExtraLinesList();
+            redrawCanvas();
+            updateExtraStatus();
+        };
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.step = 'any';
+        input.placeholder = 'فرکانس (GHz)';
+        input.value = line.freq !== null ? line.freq : '';
+        input.oninput = () => {
+            const v = parseFloat(input.value);
+            STATE.extraLines[i].freq = isNaN(v) ? null : v;
+            updateExtraStatus();
+        };
+
+        const removeBtn = document.createElement('button');
+        removeBtn.textContent = '✕';
+        removeBtn.onclick = () => {
+            STATE.extraLines.splice(i, 1);
+            renderExtraLinesList();
+            redrawCanvas();
+            updateExtraStatus();
+        };
+
+        row.appendChild(idx);
+        row.appendChild(input);
+        row.appendChild(removeBtn);
+        list.appendChild(row);
+    });
+}
+
+function updateExtraStatus() {
+    const el = document.getElementById('extraStatus');
+    if (STATE.addingExtra) {
+        el.textContent = '👆 روی خط عمودی شبکه در تصویر کلیک کن...';
+        el.style.color = '#ff9800';
+        return;
+    }
+    const valid = STATE.extraLines.filter(l => l.freq !== null).length;
+    if (valid === 0) {
+        el.textContent = 'هیچ خط مرجع اضافی وارد نشده (روش ۲ نقطه‌ای استفاده می‌شود)';
+        el.style.color = '#888';
+    } else if (valid < 2) {
+        el.textContent = `⚠️ ${valid} خط مرجع (حداقل ۲ خط برای Least Squares)`;
+        el.style.color = '#ff9800';
+    } else {
+        el.textContent = `✅ ${valid} خط مرجع فعال — کالیبراسیون با کمترین مربعات`;
+        el.style.color = '#4caf50';
+    }
 }
 
 // ============================================================
@@ -651,6 +869,11 @@ async function runExtraction() {
         const vLines = STATE.lines.filter(l => l.type === 'vertical').sort((a,b) => a.x - b.x);
         const hLines = STATE.lines.filter(l => l.type === 'horizontal').sort((a,b) => a.y - b.y);
 
+        // آماده‌سازی نقاط مرجع X برای Least Squares
+        const extra_refs = STATE.extraLines
+            .filter(l => l.freq !== null)
+            .map(l => ({ x: l.x, freq: l.freq }));
+
         const calib = {
             x1: vLines[0].x,
             f1: parseFloat(document.getElementById('f1').value),
@@ -662,7 +885,8 @@ async function runExtraction() {
             d_mid: parseFloat(document.getElementById('d_mid').value),
             y_bot: hLines[2].y,
             d_bot: parseFloat(document.getElementById('d_bot').value),
-            db_step: parseFloat(document.getElementById('dbStep').value)
+            db_step: parseFloat(document.getElementById('dbStep').value),
+            extra_refs: extra_refs
         };
 
         const corners = [
@@ -686,7 +910,8 @@ async function runExtraction() {
 
         STATE.result = result;
         showResult(result);
-        document.getElementById('status3').textContent = `✅ ${result.frequency.length} نقطه`;
+        const calibInfo = result.calib_method ? ` [${result.calib_method}]` : '';
+        document.getElementById('status3').textContent = `✅ ${result.frequency.length} نقطه${calibInfo}`;
     } catch (err) {
         console.error(err);
         document.getElementById('status3').textContent = '❌ ' + (err.message || err);
@@ -759,6 +984,9 @@ function downloadExcel() {
     XLSX.utils.book_append_sheet(wb, ws, 'Curve');
     XLSX.writeFile(wb, 'vna_curve.xlsx');
 }
+
+// مقداردهی اولیه
+updateExtraStatus();
 </script>
 
 <script type="py" src="./main.py" config="./pyscript.toml"></script>

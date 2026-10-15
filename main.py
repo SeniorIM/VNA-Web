@@ -1,6 +1,6 @@
 """
 استخراج دقیق منحنی S11 از عکس VNA
-نسخه پایدار با Nearest Neighbor + کالیبراسیون ۳ نقطه‌ای Y
+نسخه 2.0 با کالیبراسیون پیشرفته X (Least Squares)
 """
 from js import window
 import json
@@ -102,7 +102,6 @@ def perspective_rectify_pil(pil_img, corners):
 
 
 def detect_yellow_trace_np(rgb_arr):
-    """تشخیص زرد با شرط ساده"""
     r = rgb_arr[:, :, 0].astype(np.int16)
     g = rgb_arr[:, :, 1].astype(np.int16)
     b = rgb_arr[:, :, 2].astype(np.int16)
@@ -169,7 +168,6 @@ def split_groups(rows, gap=3):
 
 
 def track_nearest_np(cleaned, start_y):
-    """ردیابی ساده Nearest Neighbor"""
     h, w = cleaned.shape
     ys = np.full(w, np.nan, dtype=float)
     start_col = None
@@ -318,6 +316,49 @@ def extract_trace(mask):
 
 
 # ============================================================
+#          کالیبراسیون پیشرفته X با Least Squares
+# ============================================================
+
+def map_original_x_to_rectified(x_orig, corners, rect_w):
+    """
+    تبدیل مختصات x اصلی (روی تصویر Adject شده) به x در تصویر rectify شده.
+    چون rectify فقط از 4 گوشه‌ی مستطیل انجام شده، در راستای افقی:
+        x_rect = (x_orig - x_tl) / (x_tr - x_tl) * (rect_w - 1)
+    """
+    tl = corners[0]
+    tr = corners[1]
+    x_tl = tl[0]
+    x_tr = tr[0]
+    if abs(x_tr - x_tl) < 1e-6:
+        return 0.0
+    return (x_orig - x_tl) / (x_tr - x_tl) * (rect_w - 1)
+
+
+def calibrate_x_least_squares(x1_px, f1, x2_px, f2, extra_refs_rect, rect_w):
+    """
+    کالیبراسیون X با Least Squares.
+
+    پارامترها:
+        x1_px, x2_px : مختصات x در تصویر اصلی (Adject شده)
+        f1, f2       : فرکانس‌های مرجع
+        extra_refs_rect : لیست [(x_rect, freq)] از خطوط اضافی (قبلاً به مختصات rectify تبدیل شده)
+        rect_w       : عرض تصویر rectify
+
+    خروجی:
+        (a, b, method) که freq = a * x_rect + b
+        method: 'least_squares' یا 'two_point'
+    """
+    # تبدیل دو نقطه اصلی به مختصات rectify
+    x1_r = (x1_px / (x1_px + 1)) * 0  # placeholder, در ادامه اصلاح می‌شود
+    # نکته: باید x1_px و x2_px هم به مختصات rectify تبدیل شوند
+    # این کار در تابع اصلی انجام می‌شود، اینجا فقط مختصات rectify می‌گیریم
+
+    # نقاط پایه (در مختصات rectify)
+    # این تابع در واقع با نقاط rectify کار می‌کند
+    pass
+
+
+# ============================================================
 #          Wrapper برای JavaScript
 # ============================================================
 
@@ -336,7 +377,9 @@ def process_image(img_array, corners_list, calib_dict):
 
         corners = np.array(corners_js, dtype=float)
         rectified_pil = perspective_rectify_pil(pil_img, corners)
-        print(">>> rectify انجام شد")
+        rect_w = rectified_pil.width
+        rect_h = rectified_pil.height
+        print(f">>> rectify انجام شد → {rect_w}x{rect_h}")
 
         rectified_rgb = np.array(rectified_pil)
         mask = detect_yellow_trace_np(rectified_rgb)
@@ -345,16 +388,75 @@ def process_image(img_array, corners_list, calib_dict):
         x_clean, y_clean, x_raw, y_raw = extract_trace(mask)
         print(f">>> استخراج: {len(x_clean)} نقطه")
 
-        # کالیبراسیون X
-        x1 = calib['x1']; f1 = calib['f1']
-        x2 = calib['x2']; f2 = calib['f2']
+        # ---------- کالیبراسیون X ----------
+        x1_px = calib['x1']; f1 = calib['f1']
+        x2_px = calib['x2']; f2 = calib['f2']
 
-        # کالیبراسیون Y با ۳ نقطه
+        # تبدیل x های اصلی به مختصات rectify
+        x_tl = corners[0][0]
+        x_tr = corners[1][0]
+        if abs(x_tr - x_tl) < 1e-6:
+            raise RuntimeError("گوشه‌های بالا نامعتبرند")
+
+        def map_x_to_rect(x_orig):
+            return (x_orig - x_tl) / (x_tr - x_tl) * (rect_w - 1)
+
+        x1_r = map_x_to_rect(x1_px)
+        x2_r = map_x_to_rect(x2_px)
+
+        # خطوط مرجع اضافی
+        extra_refs_raw = calib.get('extra_refs', [])
+        if hasattr(extra_refs_raw, 'to_py'):
+            extra_refs_raw = extra_refs_raw.to_py()
+        extra_refs = []
+        for ref in extra_refs_raw:
+            if hasattr(ref, 'to_py'):
+                ref = ref.to_py()
+            x_orig = float(ref['x'])
+            freq = float(ref['freq'])
+            x_r = map_x_to_rect(x_orig)
+            extra_refs.append((x_r, freq))
+
+        # ساخت مجموعه نقاط مرجع
+        ref_points = [(x1_r, f1), (x2_r, f2)] + extra_refs
+
+        # حذف تکراری‌ها (اگر کاربر خط اضافی روی همان X1/X2 گذاشت)
+        unique_points = []
+        for (xr, fr) in ref_points:
+            is_dup = False
+            for (xr2, fr2) in unique_points:
+                if abs(xr - xr2) < 2.0:  # tolerance 2 پیکسل
+                    is_dup = True
+                    break
+            if not is_dup:
+                unique_points.append((xr, fr))
+
+        calib_method = 'two_point'
+        if len(unique_points) >= 3:
+            # Least Squares: freq = a * x_rect + b
+            X = np.array([p[0] for p in unique_points], dtype=np.float64)
+            F = np.array([p[1] for p in unique_points], dtype=np.float64)
+            A = np.vstack([X, np.ones_like(X)]).T
+            coef, *_ = np.linalg.lstsq(A, F, rcond=None)
+            a_x, b_x = coef
+            calib_method = f'least_squares({len(unique_points)}pts)'
+
+            # محاسبه خطا (RMSE)
+            F_pred = a_x * X + b_x
+            rmse = float(np.sqrt(np.mean((F - F_pred) ** 2)))
+            print(f">>> Least Squares X: freq = {a_x:.6f}*x + {b_x:.4f}, RMSE={rmse:.4f} GHz")
+        else:
+            # فقط 2 نقطه
+            a_x = (f2 - f1) / (x2_r - x1_r)
+            b_x = f1 - a_x * x1_r
+            calib_method = 'two_point'
+            print(f">>> Two-point X: freq = {a_x:.6f}*x + {b_x:.4f}")
+
+        # ---------- کالیبراسیون Y (سه نقطه‌ای) ----------
         y_top = calib['y_top']; d_top = calib['d_top']
         y_mid = calib['y_mid']; d_mid = calib['d_mid']
         y_bot = calib['y_bot']; d_bot = calib['d_bot']
 
-        rect_h = rectified_pil.height
         tl_y = corners[0][1]
         bl_y = corners[3][1]
 
@@ -368,26 +470,28 @@ def process_image(img_array, corners_list, calib_dict):
         y_pts = np.array([y_top_r, y_mid_r, y_bot_r])
         d_pts = np.array([d_top, d_mid, d_bot])
         A_ls = np.vstack([y_pts, np.ones(3)]).T
-        coef, *_ = np.linalg.lstsq(A_ls, d_pts, rcond=None)
-        a_y, b_y = coef
-
+        coef_y, *_ = np.linalg.lstsq(A_ls, d_pts, rcond=None)
+        a_y, b_y = coef_y
         print(f">>> کالیبراسیون Y: d = {a_y:.4f}*y + {b_y:.4f}")
 
-        frequency = f1 + (x_clean - x1) * (f2 - f1) / (x2 - x1)
+        # ---------- محاسبه‌ی نهایی ----------
+        frequency = a_x * x_clean + b_x
         amplitude_db = a_y * y_clean + b_y
 
+        # محدود کردن به بازه‌ی X1..X2
         lo, hi = sorted((f1, f2))
         valid = (frequency >= lo) & (frequency <= hi)
         frequency = frequency[valid]
         amplitude_db = amplitude_db[valid]
 
-        print(f">>> نتیجه: {len(frequency)} نقطه")
+        print(f">>> نتیجه: {len(frequency)} نقطه ({calib_method})")
 
         result_json = json.dumps({
             'frequency': frequency.tolist(),
             'amplitude': amplitude_db.tolist(),
             'x_raw': x_raw.tolist(),
             'y_raw': y_raw.tolist(),
+            'calib_method': calib_method,
         })
         return result_json
 
