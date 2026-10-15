@@ -65,49 +65,32 @@
         }
         #plotCanvas { width: 100%; background: #fff; border-radius: 8px; display: block; }
 
-        #libStatusPanel {
-            background: #0d1b2a;
-            border: 1px solid #1b4965;
-            border-radius: 8px;
+        /* ===== کادر وضعیت ساده ===== */
+        #globalStatus {
+            text-align: center;
+            font-weight: bold;
             padding: 12px;
             margin-bottom: 10px;
-            font-size: 14px;
-        }
-        #libStatusPanel .lib-header {
-            display: flex; justify-content: space-between; align-items: center;
-            color: #4fc3f7; font-weight: bold; margin-bottom: 8px;
+            border-radius: 8px;
             font-size: 16px;
+            border: 2px solid transparent;
+            transition: all 0.3s ease;
         }
-        #libStatusPanel .lib-list {
-            display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+        #globalStatus.waiting {
+            color: #ffd54f;
+            background: #3a2a1a;
+            border-color: #ffd54f;
         }
-        .lib-item {
-            display: flex; align-items: center; gap: 8px;
-            padding: 6px 8px; border-radius: 4px;
-            background: #1a2a3a; font-size: 14px;
+        #globalStatus.ready {
+            color: #4caf50;
+            background: #1a3a1a;
+            border-color: #4caf50;
         }
-        .lib-item.ok { color: #4caf50; }
-        .lib-item.loading { color: #ffd54f; }
-        .lib-item.error { color: #f44336; }
-        .lib-item.pending { color: #888; }
-        .lib-dot {
-            width: 10px; height: 10px; border-radius: 50%;
-            background: #888; flex-shrink: 0;
+        #globalStatus.error {
+            color: #f44336;
+            background: #3a1a1a;
+            border-color: #f44336;
         }
-        .lib-item.ok .lib-dot { background: #4caf50; box-shadow: 0 0 8px #4caf50; }
-        .lib-item.loading .lib-dot { background: #ffd54f; animation: pulse 1s infinite; }
-        .lib-item.error .lib-dot { background: #f44336; }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.3; }
-        }
-        #globalStatus {
-            text-align: center; font-weight: bold; padding: 8px;
-            margin-top: 10px; border-radius: 6px; font-size: 15px;
-        }
-        #globalStatus.waiting { color: #ffd54f; background: #3a2a1a; }
-        #globalStatus.ready { color: #4caf50; background: #1a3a1a; }
-        #globalStatus.error { color: #f44336; background: #3a1a1a; }
 
         details { margin-top: 8px; }
         summary { cursor: pointer; color: #4fc3f7; font-size: 15px; padding: 6px; }
@@ -117,18 +100,8 @@
 
 <h1>📊 VNA Curve Extractor</h1>
 
-<div id="libStatusPanel">
-    <div class="lib-header">
-        <span>🔌 وضعیت کتابخانه‌ها</span>
-        <span id="libProgress">0/3</span>
-    </div>
-    <div class="lib-list" id="libList">
-        <div class="lib-item pending" data-lib="pyodide"><span class="lib-dot"></span>Pyodide</div>
-        <div class="lib-item pending" data-lib="numpy"><span class="lib-dot"></span>NumPy</div>
-        <div class="lib-item pending" data-lib="pillow"><span class="lib-dot"></span>Pillow</div>
-    </div>
-    <div id="globalStatus" class="waiting">⏳ در حال آماده‌سازی...</div>
-</div>
+<!-- ===== کادر وضعیت ساده ===== -->
+<div id="globalStatus" class="waiting">⏳ در حال آماده‌سازی...</div>
 
 <div class="card">
     <h2>مرحله 1: انتخاب تصویر</h2>
@@ -205,36 +178,36 @@
 
 <script>
 // ============================================================
-//   پنل وضعیت کتابخانه‌ها
+//   کادر وضعیت ساده (فقط 3 حالت: waiting / ready / error)
 // ============================================================
 const LIB_TOTAL = 3;
+let libOkCount = 0;
 
-function updateLibStatus(name, state, msg) {
-    const el = document.querySelector(`.lib-item[data-lib="${name}"]`);
-    if (!el) return;
-    el.classList.remove('pending', 'loading', 'ok', 'error');
-    el.classList.add(state);
-    if (msg) el.innerHTML = `<span class="lib-dot"></span>${msg}`;
-    if (state === 'ok') {
-        const libDone = document.querySelectorAll('.lib-item.ok').length;
-        document.getElementById('libProgress').textContent = `${libDone}/${LIB_TOTAL}`;
-        if (libDone >= LIB_TOTAL) {
-            const g = document.getElementById('globalStatus');
-            g.className = 'ready';
-            g.textContent = '✅ همه کتابخانه‌ها وصل شدند — آماده استخراج';
-        }
-    }
-    if (state === 'error') {
-        const g = document.getElementById('globalStatus');
-        g.className = 'error';
-        g.textContent = `❌ خطا در بارگذاری ${name}`;
-    }
+function setGlobalStatus(state, text) {
+    const g = document.getElementById('globalStatus');
+    g.className = state;
+    g.textContent = text;
 }
 
-window.updateLibStatus = updateLibStatus;
-window.markLibLoading = (name) => updateLibStatus(name, 'loading', name + '...');
-window.markLibOk = (name) => updateLibStatus(name, 'ok', name + ' ✅');
-window.markLibError = (name) => updateLibStatus(name, 'error', name + ' ❌');
+// این توابع از سمت پایتون صدا زده می‌شن
+window.markLibLoading = (name) => {
+    console.log(`[lib] ${name} → loading`);
+};
+window.markLibOk = (name) => {
+    console.log(`[lib] ${name} → OK`);
+    libOkCount++;
+    if (libOkCount >= LIB_TOTAL) {
+        setGlobalStatus('ready', '✅ کتابخانه‌ها با موفقیت وصل شدند');
+    }
+};
+window.markLibError = (name) => {
+    console.error(`[lib] ${name} → ERROR`);
+    setGlobalStatus('error', `❌ خطا در بارگذاری ${name} (کنسول را ببینید)`);
+};
+window.markLibError = (name) => {
+    console.error(`[lib] ${name} → ERROR`);
+    setGlobalStatus('error', `❌ خطا در بارگذاری ${name} (کنسول را ببینید)`);
+};
 
 // ============================================================
 //   Adjustment تصویر
@@ -329,14 +302,13 @@ const STATE = {
     image: null,
     imageAdjusted: null,
     imageWidth: 0, imageHeight: 0,
-    lineStep: 0,           // شماره خط فعلی (0 تا 5)
-    lines: [],             // خطوط کشیده شده
-    allLines: [],          // برای Undo
+    lineStep: 0,
+    lines: [],
+    allLines: [],
     result: null,
     adjValues: {}
 };
 
-// ترتیب خطوط: 1=عمودی چپ, 2=عمودی راست, 3=افقی بالا, 4=افقی وسط, 5=افقی پایین
 const LINE_STEPS_TEXT = [
     'آماده',
     'خط عمودی سمت چپ نمودار (شروع فرکانس)',
@@ -389,7 +361,6 @@ function applyAdjustAndReload(silent) {
     }
     readAdjValuesFromUI();
 
-    // رزایز به حداکثر عرض ۱۲۰۰
     const MAX_WIDTH = 1200;
     let srcW = STATE.image.width, srcH = STATE.image.height;
     let dstW = srcW, dstH = srcH;
@@ -443,21 +414,17 @@ document.getElementById('canvas').addEventListener('click', function(e) {
 });
 
 function handleLineClick(x, y) {
-    const step = STATE.lineStep;  // 1 تا 5
+    const step = STATE.lineStep;
     const type = (step <= 2) ? 'vertical' : 'horizontal';
-    // برای خط عمودی فقط x مهمه، برای افقی فقط y
     const line = {
         type: type,
-        x: x,
-        y: y,
+        x: x, y: y,
         step: step,
         color: LINE_COLORS[step - 1],
         label: LINE_LABELS[step - 1]
     };
     STATE.lines.push(line);
     STATE.allLines.push(line);
-
-    // رسم خط روی canvas
     drawLine(line);
 
     STATE.lineStep++;
@@ -465,7 +432,6 @@ function handleLineClick(x, y) {
         document.getElementById('stepInfo').textContent = LINE_STEPS_TEXT[STATE.lineStep];
     }
     if (STATE.lineStep === 3) {
-        // بعد از دو خط عمودی، مقادیر X رو نشون بده
         document.getElementById('valuesCard').style.display = 'block';
     }
     if (STATE.lineStep === 6) {
@@ -490,7 +456,6 @@ function drawLine(line) {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // برچسب
     ctx.fillStyle = line.color;
     ctx.font = 'bold 16px Arial';
     if (line.type === 'vertical') {
@@ -506,14 +471,12 @@ function undoLastLine() {
     if (STATE.allLines.length === 0) return;
     const last = STATE.allLines.pop();
     STATE.lineStep = last.step;
-    // حذف از STATE.lines
     for (let i = STATE.lines.length - 1; i >= 0; i--) {
         if (STATE.lines[i].step === last.step) {
             STATE.lines.splice(i, 1);
             break;
         }
     }
-    // بازترسیم
     const canvas = document.getElementById('canvas');
     canvas.getContext('2d').drawImage(STATE.imageAdjusted, 0, 0);
     for (const line of STATE.lines) drawLine(line);
@@ -550,17 +513,14 @@ async function runExtraction() {
     document.getElementById('status3').textContent = '⏳ در حال استخراج...';
     document.getElementById('extractBtn').disabled = true;
     try {
-        // ساخت کالیبراسیون از ۵ خط
         const vLines = STATE.lines.filter(l => l.type === 'vertical').sort((a,b) => a.x - b.x);
         const hLines = STATE.lines.filter(l => l.type === 'horizontal').sort((a,b) => a.y - b.y);
 
         const calib = {
-            // خطوط عمودی: x1 چپ، x2 راست
             x1: vLines[0].x,
             f1: parseFloat(document.getElementById('f1').value),
             x2: vLines[1].x,
             f2: parseFloat(document.getElementById('f2').value),
-            // خطوط افقی: بالا، وسط، پایین
             y_top: hLines[0].y,
             d_top: parseFloat(document.getElementById('d_top').value),
             y_mid: hLines[1].y,
@@ -570,13 +530,11 @@ async function runExtraction() {
             db_step: parseFloat(document.getElementById('dbStep').value)
         };
 
-        // گوشه‌ها از تقاطع خطوط
-        // TL = (x1, y_top), TR = (x2, y_top), BR = (x2, y_bot), BL = (x1, y_bot)
         const corners = [
-            [vLines[0].x, hLines[0].y],  // TL
-            [vLines[1].x, hLines[0].y],  // TR
-            [vLines[1].x, hLines[2].y],  // BR
-            [vLines[0].x, hLines[2].y],  // BL
+            [vLines[0].x, hLines[0].y],
+            [vLines[1].x, hLines[0].y],
+            [vLines[1].x, hLines[2].y],
+            [vLines[0].x, hLines[2].y],
         ];
 
         const imgArray = await imageToArray(STATE.imageAdjusted);
