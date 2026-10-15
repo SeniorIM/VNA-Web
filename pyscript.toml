@@ -1,1 +1,4 @@
 packages = ["numpy", "opencv-python", "pandas", "openpyxl", "scipy"]
+
+[[fetch]]
+files = ["./main.py"]
