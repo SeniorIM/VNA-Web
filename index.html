@@ -168,24 +168,9 @@
     <button class="btn btn-success" onclick="downloadExcel()" style="margin-top:10px">
         💾 دانلود Excel
     </button>
-    <button class="btn btn-warning" onclick="retryExtraction()" style="margin-top:8px">
-        🔄 دوباره استخراج (پروفایل بعدی)
-    </button>
 </div>
 
 <script>
-// ============================================================
-//   پروفایل‌های Viterbi
-// ============================================================
-const VITERBI_PROFILES = [
-    { name: 'متعادل',      LAMBDA_SMOOTH: 0.8, SIGMA_OBS: 3.0, MAX_JUMP_RATIO: 0.15 },
-    { name: 'نرم‌تر',       LAMBDA_SMOOTH: 1.5, SIGMA_OBS: 5.0, MAX_JUMP_RATIO: 0.20 },
-    { name: 'دقیق‌تر',      LAMBDA_SMOOTH: 0.4, SIGMA_OBS: 2.0, MAX_JUMP_RATIO: 0.10 },
-    { name: 'خیلی نرم',    LAMBDA_SMOOTH: 2.0, SIGMA_OBS: 7.0, MAX_JUMP_RATIO: 0.25 },
-    { name: 'خیلی دقیق',   LAMBDA_SMOOTH: 0.2, SIGMA_OBS: 1.5, MAX_JUMP_RATIO: 0.08 },
-];
-let currentProfileIdx = 0;
-
 // ============================================================
 //   کادر وضعیت
 // ============================================================
@@ -399,7 +384,6 @@ function applyAdjustAndReload(silent) {
 
     STATE.lineStep = 1;
     STATE.lines = []; STATE.allLines = [];
-    currentProfileIdx = 0;
 
     document.getElementById('clickCard').style.display = 'block';
     document.getElementById('valuesCard').style.display = 'none';
@@ -641,7 +625,6 @@ function undoLastLine() {
 function resetLines() {
     STATE.lineStep = 1;
     STATE.lines = []; STATE.allLines = [];
-    currentProfileIdx = 0;
     redrawCanvas();
     document.getElementById('stepInfo').textContent = LINE_STEPS_TEXT[1];
     document.getElementById('valuesCard').style.display = 'none';
@@ -662,9 +645,7 @@ async function runExtraction() {
         return;
     }
 
-    const profile = VITERBI_PROFILES[currentProfileIdx];
-    document.getElementById('status3').textContent =
-        `⏳ در حال استخراج (پروفایل: ${profile.name})...`;
+    document.getElementById('status3').textContent = '⏳ در حال استخراج...';
     document.getElementById('extractBtn').disabled = true;
     try {
         const vLines = STATE.lines.filter(l => l.type === 'vertical').sort((a,b) => a.x - b.x);
@@ -681,10 +662,7 @@ async function runExtraction() {
             d_mid: parseFloat(document.getElementById('d_mid').value),
             y_bot: hLines[2].y,
             d_bot: parseFloat(document.getElementById('d_bot').value),
-            db_step: parseFloat(document.getElementById('dbStep').value),
-            LAMBDA_SMOOTH: profile.LAMBDA_SMOOTH,
-            SIGMA_OBS: profile.SIGMA_OBS,
-            MAX_JUMP_RATIO: profile.MAX_JUMP_RATIO
+            db_step: parseFloat(document.getElementById('dbStep').value)
         };
 
         const corners = [
@@ -708,20 +686,12 @@ async function runExtraction() {
 
         STATE.result = result;
         showResult(result);
-        document.getElementById('status3').textContent =
-            `✅ ${result.frequency.length} نقطه (پروفایل: ${profile.name})`;
+        document.getElementById('status3').textContent = `✅ ${result.frequency.length} نقطه`;
     } catch (err) {
         console.error(err);
         document.getElementById('status3').textContent = '❌ ' + (err.message || err);
     }
     document.getElementById('extractBtn').disabled = false;
-}
-
-async function retryExtraction() {
-    currentProfileIdx = (currentProfileIdx + 1) % VITERBI_PROFILES.length;
-    const profile = VITERBI_PROFILES[currentProfileIdx];
-    console.log(`🔄 تلاش مجدد با پروفایل: ${profile.name}`);
-    await runExtraction();
 }
 
 function imageToArray(imgOrCanvas) {

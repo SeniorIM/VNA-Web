@@ -102,9 +102,7 @@ def perspective_rectify_pil(pil_img, corners):
 
 
 def detect_yellow_trace_np(rgb_arr):
-    """
-    تشخیص زرد - با شرط ساده (بدون پیچیدگی اضافه)
-    """
+    """تشخیص زرد با شرط ساده"""
     r = rgb_arr[:, :, 0].astype(np.int16)
     g = rgb_arr[:, :, 1].astype(np.int16)
     b = rgb_arr[:, :, 2].astype(np.int16)
@@ -171,10 +169,7 @@ def split_groups(rows, gap=3):
 
 
 def track_nearest_np(cleaned, start_y):
-    """
-    ردیابی ساده Nearest Neighbor
-    هیچ وزن‌دهی یا پیچیدگی اضافه نداره
-    """
+    """ردیابی ساده Nearest Neighbor"""
     h, w = cleaned.shape
     ys = np.full(w, np.nan, dtype=float)
     start_col = None
@@ -193,7 +188,6 @@ def track_nearest_np(cleaned, start_y):
     ys[start_col] = np.mean(closest)
     prev_y = ys[start_col]
 
-    # رفتن به راست
     for x in range(start_col + 1, w):
         rows = np.flatnonzero(cleaned[:, x])
         if len(rows) == 0:
@@ -203,7 +197,6 @@ def track_nearest_np(cleaned, start_y):
         ys[x] = np.mean(closest)
         prev_y = ys[x]
 
-    # رفتن به چپ
     prev_y = ys[start_col]
     for x in range(start_col - 1, -1, -1):
         rows = np.flatnonzero(cleaned[:, x])
@@ -247,9 +240,6 @@ def fill_short_gaps(ys, max_gap_ratio=0.03):
 
 
 def remove_isolated_spikes(ys, h, max_jump_ratio=0.20):
-    """
-    حذف اسپایک‌ها - آستانه 0.20 (متوسط)
-    """
     ys = ys.copy()
     w = len(ys)
     threshold = h * max_jump_ratio
@@ -355,11 +345,11 @@ def process_image(img_array, corners_list, calib_dict):
         x_clean, y_clean, x_raw, y_raw = extract_trace(mask)
         print(f">>> استخراج: {len(x_clean)} نقطه")
 
-        # ===== کالیبراسیون X =====
+        # کالیبراسیون X
         x1 = calib['x1']; f1 = calib['f1']
         x2 = calib['x2']; f2 = calib['f2']
 
-        # ===== کالیبراسیون Y با ۳ نقطه =====
+        # کالیبراسیون Y با ۳ نقطه
         y_top = calib['y_top']; d_top = calib['d_top']
         y_mid = calib['y_mid']; d_mid = calib['d_mid']
         y_bot = calib['y_bot']; d_bot = calib['d_bot']
