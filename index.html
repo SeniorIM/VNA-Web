@@ -19,16 +19,17 @@
             font-family: Tahoma, Arial, sans-serif;
             margin: 0; padding: 8px;
             background: #1a1a1a; color: #eee;
+            font-size: 16px;
         }
-        h1 { font-size: 18px; text-align: center; color: #4fc3f7; }
+        h1 { font-size: 24px; text-align: center; color: #4fc3f7; margin: 10px 0; }
         .card {
             background: #2a2a2a; border-radius: 10px;
-            padding: 10px; margin-bottom: 10px; border: 1px solid #444;
+            padding: 12px; margin-bottom: 10px; border: 1px solid #444;
         }
-        .card h2 { font-size: 14px; margin: 0 0 8px 0; color: #ffd54f; }
+        .card h2 { font-size: 18px; margin: 0 0 10px 0; color: #ffd54f; }
         .btn {
             background: #2196f3; color: white; border: none;
-            padding: 12px; border-radius: 8px; font-size: 14px;
+            padding: 14px; border-radius: 8px; font-size: 16px;
             cursor: pointer; width: 100%; margin: 4px 0;
         }
         .btn:active { background: #1976d2; }
@@ -36,50 +37,65 @@
         .btn-success { background: #4caf50; }
         .btn-warning { background: #ff9800; }
         .btn-danger { background: #f44336; }
-        .canvas-wrap { width: 100%; overflow: hidden; background: #000; border-radius: 8px; }
-        #canvas { display: block; width: 100%; height: auto; }
-        .status {
-            background: #333; padding: 8px; border-radius: 6px;
-            font-size: 12px; text-align: center; margin-top: 6px; color: #4fc3f7;
+
+        .canvas-wrap {
+            width: 100%;
+            max-width: 900px;
+            margin: 0 auto;
+            overflow: hidden;
+            background: #000;
+            border-radius: 8px;
         }
-        .inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-        .inputs label { font-size: 11px; color: #aaa; display: block; }
+        #canvas { display: block; width: 100%; height: auto; }
+
+        .status {
+            background: #333; padding: 10px; border-radius: 6px;
+            font-size: 15px; text-align: center; margin-top: 6px; color: #4fc3f7;
+        }
+        .inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .inputs label { font-size: 14px; color: #aaa; display: block; margin-bottom: 4px; }
         .inputs input, .inputs select {
-            width: 100%; padding: 8px; border: 1px solid #555;
-            border-radius: 6px; background: #1a1a1a; color: #fff; text-align: center;
+            width: 100%; padding: 10px; border: 1px solid #555;
+            border-radius: 6px; background: #1a1a1a; color: #fff;
+            text-align: center; font-size: 15px;
         }
         #stepInfo {
-            font-size: 13px; color: #ffd54f; text-align: center;
-            padding: 6px; background: #1a1a1a; border-radius: 6px; margin-top: 6px;
+            font-size: 16px; color: #ffd54f; text-align: center;
+            padding: 8px; background: #1a1a1a; border-radius: 6px; margin-top: 8px;
         }
         #plotCanvas { width: 100%; background: #fff; border-radius: 8px; display: block; }
 
+        /* === پنل وضعیت کتابخانه‌ها === */
         #libStatusPanel {
-            background: #0d1b2a; border: 1px solid #1b4965;
-            border-radius: 8px; padding: 10px;
-            margin-bottom: 10px; font-size: 12px;
+            background: #0d1b2a;
+            border: 1px solid #1b4965;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+            font-size: 14px;
         }
         #libStatusPanel .lib-header {
             display: flex; justify-content: space-between; align-items: center;
-            color: #4fc3f7; font-weight: bold; margin-bottom: 6px;
+            color: #4fc3f7; font-weight: bold; margin-bottom: 8px;
+            font-size: 16px;
         }
         #libStatusPanel .lib-list {
-            display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+            display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
         }
         .lib-item {
-            display: flex; align-items: center; gap: 6px;
-            padding: 4px 6px; border-radius: 4px;
-            background: #1a2a3a; font-size: 11px;
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 8px; border-radius: 4px;
+            background: #1a2a3a; font-size: 14px;
         }
         .lib-item.ok { color: #4caf50; }
         .lib-item.loading { color: #ffd54f; }
         .lib-item.error { color: #f44336; }
         .lib-item.pending { color: #888; }
         .lib-dot {
-            width: 8px; height: 8px; border-radius: 50%;
+            width: 10px; height: 10px; border-radius: 50%;
             background: #888; flex-shrink: 0;
         }
-        .lib-item.ok .lib-dot { background: #4caf50; box-shadow: 0 0 6px #4caf50; }
+        .lib-item.ok .lib-dot { background: #4caf50; box-shadow: 0 0 8px #4caf50; }
         .lib-item.loading .lib-dot { background: #ffd54f; animation: pulse 1s infinite; }
         .lib-item.error .lib-dot { background: #f44336; }
         @keyframes pulse {
@@ -87,21 +103,22 @@
             50% { opacity: 0.3; }
         }
         #globalStatus {
-            text-align: center; font-weight: bold; padding: 6px;
-            margin-top: 8px; border-radius: 6px; font-size: 13px;
+            text-align: center; font-weight: bold; padding: 8px;
+            margin-top: 10px; border-radius: 6px; font-size: 15px;
         }
         #globalStatus.waiting { color: #ffd54f; background: #3a2a1a; }
         #globalStatus.ready { color: #4caf50; background: #1a3a1a; }
         #globalStatus.error { color: #f44336; background: #3a1a1a; }
 
-        details { margin-top: 6px; }
-        summary { cursor: pointer; color: #4fc3f7; font-size: 12px; padding: 4px; }
+        details { margin-top: 8px; }
+        summary { cursor: pointer; color: #4fc3f7; font-size: 15px; padding: 6px; }
     </style>
 </head>
 <body>
 
 <h1>📊 VNA Curve Extractor</h1>
 
+<!-- ============ پنل وضعیت کتابخانه‌ها ============ -->
 <div id="libStatusPanel">
     <div class="lib-header">
         <span>🔌 وضعیت کتابخانه‌ها</span>
@@ -123,9 +140,10 @@
     </button>
     <div class="status" id="status1">منتظر انتخاب تصویر...</div>
 
+    <!-- تنظیمات Adjustment -->
     <details open>
         <summary>⚙️ تنظیمات تصویر (Adjustment)</summary>
-        <div class="inputs" style="margin-top:6px;">
+        <div class="inputs" style="margin-top:8px;">
             <div><label>Brightness</label><input type="number" id="adjBrightness" value="-100" step="5"></div>
             <div><label>Exposure</label><input type="number" id="adjExposure" value="100" step="5"></div>
             <div><label>Contrast</label><input type="number" id="adjContrast" value="100" step="5"></div>
@@ -134,7 +152,7 @@
             <div><label>Saturation</label><input type="number" id="adjSaturation" value="100" step="5"></div>
             <div><label>Sharpness</label><input type="number" id="adjSharpness" value="50" step="5"></div>
         </div>
-        <button class="btn btn-warning" onclick="applyAdjustAndReload()" style="margin-top:6px; font-size:12px; padding:8px;">
+        <button class="btn btn-warning" onclick="applyAdjustAndReload()" style="margin-top:8px; font-size:14px; padding:10px;">
             🔄 اعمال Adjustment روی تصویر
         </button>
     </details>
@@ -144,7 +162,7 @@
     <h2>مرحله 2: کلیک روی نقاط</h2>
     <div class="canvas-wrap"><canvas id="canvas"></canvas></div>
     <div id="stepInfo">آماده</div>
-    <div style="display:flex; gap:6px; margin-top:6px;">
+    <div style="display:flex; gap:8px; margin-top:8px;">
         <button class="btn btn-warning" onclick="undoLastPoint()" style="flex:1">↩️ لغو</button>
         <button class="btn btn-danger" onclick="resetClicks()" style="flex:1">🔄 شروع مجدد</button>
     </div>
@@ -159,11 +177,11 @@
         <div><label>Y2 (dB)</label><input type="number" id="d2" value="-30" step="any"></div>
     </div>
 
-    <div style="margin-top:10px;">
-        <label style="font-size:12px; color:#aaa; display:block; margin-bottom:4px;">
+    <div style="margin-top:12px;">
+        <label style="font-size:14px; color:#aaa; display:block; margin-bottom:4px;">
             گام خطوط افقی محور عمودی (dB):
         </label>
-        <select id="dbStep" style="width:100%; padding:10px; border-radius:6px; background:#1a1a1a; color:#fff; border:1px solid #555;">
+        <select id="dbStep" style="width:100%; padding:12px; border-radius:6px; background:#1a1a1a; color:#fff; border:1px solid #555; font-size:15px;">
             <option value="10" selected>10 dB</option>
             <option value="20">20 dB</option>
             <option value="30">30 dB</option>
@@ -172,7 +190,7 @@
         </select>
     </div>
 
-    <button class="btn btn-success" id="extractBtn" onclick="runExtraction()" style="margin-top:10px">
+    <button class="btn btn-success" id="extractBtn" onclick="runExtraction()" style="margin-top:12px">
         ⚡ استخراج
     </button>
     <div class="status" id="status3"></div>
@@ -225,11 +243,11 @@ window.markLibError = (name) => updateLibStatus(name, 'error', name + ' ❌');
 // ============================================================
 //   Adjustment تصویر
 // ============================================================
-function applyAdjustments(img, adj) {
+function applyAdjustments(imgOrCanvas, adj) {
     const c = document.createElement('canvas');
-    c.width = img.width; c.height = img.height;
+    c.width = imgOrCanvas.width; c.height = imgOrCanvas.height;
     const ctx = c.getContext('2d');
-    ctx.drawImage(img, 0, 0);
+    ctx.drawImage(imgOrCanvas, 0, 0);
 
     const imgData = ctx.getImageData(0, 0, c.width, c.height);
     const d = imgData.data;
@@ -346,8 +364,6 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
             STATE.image = img;
             STATE.imageWidth = img.width;
             STATE.imageHeight = img.height;
-            window.imageWidth = img.width;
-            window.imageHeight = img.height;
 
             readAdjValuesFromUI();
             applyAdjustAndReload(true);
@@ -369,18 +385,54 @@ function readAdjValuesFromUI() {
     };
 }
 
+// ============================================================
+//   رزایز + Adjustment
+// ============================================================
 function applyAdjustAndReload(silent) {
     if (!STATE.image) {
         if (!silent) alert('اول یک تصویر انتخاب کنید.');
         return;
     }
     readAdjValuesFromUI();
-    STATE.imageAdjusted = applyAdjustments(STATE.image, STATE.adjValues);
 
+    // ===== رزایز تصویر به حداکثر عرض ۱۲۰۰ پیکسل =====
+    // ۱۲۰۰ انتخاب شد چون:
+    // - دقت استخراج بالاست (پیکسل‌های کافی برای تشخیص منحنی)
+    // - حجم صفحه معقول می‌مونه
+    const MAX_WIDTH = 1200;
+    let srcW = STATE.image.width;
+    let srcH = STATE.image.height;
+    let dstW = srcW, dstH = srcH;
+
+    if (srcW > MAX_WIDTH) {
+        const ratio = MAX_WIDTH / srcW;
+        dstW = MAX_WIDTH;
+        dstH = Math.round(srcH * ratio);
+    }
+
+    // ساخت canvas موقت برای رزایز
+    const resizeCanvas = document.createElement('canvas');
+    resizeCanvas.width = dstW;
+    resizeCanvas.height = dstH;
+    const resizeCtx = resizeCanvas.getContext('2d');
+    resizeCtx.imageSmoothingEnabled = true;
+    resizeCtx.imageSmoothingQuality = 'high';
+    resizeCtx.drawImage(STATE.image, 0, 0, dstW, dstH);
+
+    // اعمال Adjustment روی تصویر رزایز شده
+    STATE.imageAdjusted = applyAdjustments(resizeCanvas, STATE.adjValues);
+
+    // نمایش روی canvas اصلی
     const canvas = document.getElementById('canvas');
     canvas.width = STATE.imageAdjusted.width;
     canvas.height = STATE.imageAdjusted.height;
     canvas.getContext('2d').drawImage(STATE.imageAdjusted, 0, 0);
+
+    // به‌روزرسانی ابعاد برای پایتون
+    STATE.imageWidth = STATE.imageAdjusted.width;
+    STATE.imageHeight = STATE.imageAdjusted.height;
+    window.imageWidth = STATE.imageAdjusted.width;
+    window.imageHeight = STATE.imageAdjusted.height;
 
     STATE.clickStep = 1;
     STATE.corners = []; STATE.xPoints = []; STATE.yPoints = [];
@@ -390,7 +442,7 @@ function applyAdjustAndReload(silent) {
     document.getElementById('valuesCard').style.display = 'none';
     document.getElementById('resultCard').style.display = 'none';
     document.getElementById('status1').textContent =
-        `✅ ${STATE.imageAdjusted.width}×${STATE.imageAdjusted.height} (با Adjustment)`;
+        `✅ ${STATE.imageAdjusted.width}×${STATE.imageAdjusted.height} (رزایز + Adjustment)`;
     document.getElementById('stepInfo').textContent = STEPS_TEXT[1];
 }
 
@@ -439,12 +491,14 @@ function handleClick(x, y) {
 function drawMarker(x, y, color, label) {
     const ctx = document.getElementById('canvas').getContext('2d');
     ctx.beginPath();
-    ctx.arc(x, y, 6, 0, 2 * Math.PI);
+    ctx.arc(x, y, 7, 0, 2 * Math.PI);
     ctx.fillStyle = color; ctx.fill();
     ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke();
     if (label) {
-        ctx.fillStyle = 'white'; ctx.font = 'bold 12px Arial';
-        ctx.textAlign = 'center'; ctx.fillText(label, x, y + 4);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 14px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(label, x, y + 5);
     }
 }
 
@@ -557,7 +611,7 @@ function showResult(result) {
         `${result.frequency.length} نقطه`;
     const canvas = document.getElementById('plotCanvas');
     const ctx = canvas.getContext('2d');
-    const W = canvas.width, H = canvas.height, pad = 50;
+    const W = canvas.width, H = canvas.height, pad = 60;
     ctx.fillStyle = 'white'; ctx.fillRect(0, 0, W, H);
     const xs = result.frequency, ys = result.amplitude;
     const xMin = Math.min(...xs), xMax = Math.max(...xs);
@@ -570,16 +624,16 @@ function showResult(result) {
     for (let i = 0; i <= 5; i++) {
         const y = yLo + (yHi - yLo) * i / 5;
         ctx.beginPath(); ctx.moveTo(pad, py(y)); ctx.lineTo(W - pad, py(y)); ctx.stroke();
-        ctx.fillStyle = '#333'; ctx.font = '11px Arial'; ctx.textAlign = 'right';
-        ctx.fillText(y.toFixed(1), pad - 5, py(y) + 4);
+        ctx.fillStyle = '#333'; ctx.font = '13px Arial'; ctx.textAlign = 'right';
+        ctx.fillText(y.toFixed(1), pad - 6, py(y) + 5);
     }
     for (let i = 0; i <= 4; i++) {
         const x = xMin + (xMax - xMin) * i / 4;
         ctx.beginPath(); ctx.moveTo(px(x), pad); ctx.lineTo(px(x), H - pad); ctx.stroke();
-        ctx.fillStyle = '#333'; ctx.textAlign = 'center';
-        ctx.fillText(x.toFixed(2), px(x), H - pad + 15);
+        ctx.fillStyle = '#333'; ctx.font = '13px Arial'; ctx.textAlign = 'center';
+        ctx.fillText(x.toFixed(2), px(x), H - pad + 18);
     }
-    ctx.strokeStyle = '#1976d2'; ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#1976d2'; ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(px(xs[0]), py(ys[0]));
     for (let i = 1; i < xs.length; i++) ctx.lineTo(px(xs[i]), py(ys[i]));
