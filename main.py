@@ -1,6 +1,6 @@
 """
 استخراج دقیق منحنی S11 از عکس VNA
-نسخه پایدار با درون‌یابی دوخطی (bilinear) در rectify
+نسخه با دقت بالا - sub-pixel + adaptive threshold + smart tracking
 """
 from js import window
 import json
@@ -50,11 +50,7 @@ def numpy_to_pil(arr_rgb, w, h):
 
 
 def perspective_rectify_pil(pil_img, corners):
-    """
-    تصحیح پرسپکتیو با درون‌یابی دوخطی (bilinear)
-    - دقت بالاتر از nearest neighbor
-    - بدون تغییر در ساختار هوموگرافی
-    """
+    """تصحیح پرسپکتیو با درون‌یابی دوخطی (bilinear)"""
     tl, tr, br, bl = corners
     width_a = np.linalg.norm(np.array(br) - np.array(bl))
     width_b = np.linalg.norm(np.array(tr) - np.array(tl))
@@ -84,6 +80,7 @@ def perspective_rectify_pil(pil_img, corners):
         h_coef, *_ = np.linalg.lstsq(A, b, rcond=None)
     H = np.append(h_coef, 1.0).reshape(3, 3)
 
+    # meshgrid
     u, v = np.meshgrid(np.arange(out_w), np.arange(out_h))
     ones = np.ones_like(u)
     coords = np.stack([u, v, ones], axis=-1).reshape(-1, 3).T
@@ -98,7 +95,7 @@ def perspective_rectify_pil(pil_img, corners):
     xs_f = src_coords[0, :].reshape(out_h, out_w)
     ys_f = src_coords[1, :].reshape(out_h, out_w)
 
-    # ===== درون‌یابی دوخطی (Bilinear) =====
+    # ===== درون‌یابی دوخطی برای دقت بالاتر =====
     arr = np.array(pil_img).astype(np.float32)
     h_img, w_img = arr.shape[:2]
 
@@ -110,17 +107,19 @@ def perspective_rectify_pil(pil_img, corners):
     x1 = np.minimum(x0 + 1, w_img - 1)
     y1 = np.minimum(y0 + 1, h_img - 1)
 
-    wx = (xs_f - x0)[..., None]
-    wy = (ys_f - y0)[..., None]
+    wx = xs_f - x0
+    wy = ys_f - y0
+    wx = wx[..., None]
+    wy = wy[..., None]
 
     c00 = arr[y0, x0]
     c10 = arr[y0, x1]
     c01 = arr[y1, x0]
     c11 = arr[y1, x1]
 
-    out_arr = (c00 * (1 - wx) * (1 - wy) +
-               c10 * wx * (1 - wy) +
-               c01 * (1 - wx) * wy +
+    out_arr = (c00 * (1-wx) * (1-wy) +
+               c10 * wx * (1-wy) +
+               c01 * (1-wx) * wy +
                c11 * wx * wy)
 
     return Image.fromarray(np.clip(out_arr, 0, 255).astype(np.uint8), "RGB")
@@ -128,24 +127,36 @@ def perspective_rectify_pil(pil_img, corners):
 
 def detect_yellow_trace_np(rgb_arr):
     """
-    تشخیص زرد با آستانه‌گذاری ثابت + دو شرط اضافه برای کاهش نویز
-    بدون تغییر در ساختار کلی
+    تشخیص زرد با آستانه‌گذاری تطبیقی (adaptive) + بازه HSV دستی
     """
-    r = rgb_arr[:, :, 0].astype(np.int16)
-    g = rgb_arr[:, :, 1].astype(np.int16)
-    b = rgb_arr[:, :, 2].astype(np.int16)
+    r = rgb_arr[:, :, 0].astype(np.float32)
+    g = rgb_arr[:, :, 1].astype(np.float32)
+    b = rgb_arr[:, :, 2].astype(np.float32)
+
+    # ===== فاکتور روشنایی کلی =====
+    # زرد واقعی: R بالا، G بالا، B پایین
+    brightness = (r + g + b) / 3.0
+
+    # ===== شرایط اصلی =====
+    # zرد باید نسبت به محیط روشن‌تر باشه
+    is_bright = brightness > 40
+
+    # نسبت رنگ
+    yellow_score = (r + g) / 2.0 - b  # زرد → مثبت، آبی/سبز → منفی
+
+    # آستانه تطبیقی بر اساس میانه تصویر
+    median_yellow = np.median(yellow_score)
+    std_yellow = np.std(yellow_score)
+    threshold = median_yellow + 1.0 * std_yellow
 
     mask = (
-        (r > 100) &
-        (g > 80) &
-        (b < 120) &
-        (r > b + 30) &
-        (g > b + 20) &
-        (np.abs(r - g) < 80) &
-        # ===== دو شرط اضافه برای کاهش نویز =====
-        ((r + g) / 2 - b > 50) &    # زرد بودن واضح‌تر
-        ((r + g + b) > 200)          # جلوگیری از پیکسل‌های تاریک
+        is_bright &
+        (yellow_score > threshold) &
+        (r > b + 25) &
+        (g > b + 15) &
+        (np.abs(r - g) < 90)
     )
+
     return mask.astype(np.uint8)
 
 
@@ -207,7 +218,10 @@ def split_groups(rows, gap=3):
 
 
 def track_nearest_np(cleaned, start_y):
-    """ردیابی منحنی با میانگین گروه نزدیک (بدون تغییر)"""
+    """
+    ردیابی منحنی با میانگین وزنی مرکز گروه (وزن = فاصله معکوس)
+    دقت زیر-پیکسلی بیشتر
+    """
     h, w = cleaned.shape
     ys = np.full(w, np.nan, dtype=float)
     start_col = None
@@ -218,21 +232,26 @@ def track_nearest_np(cleaned, start_y):
     if start_col is None:
         return ys
 
+    def get_subpixel_center(rows, prev_y):
+        """مرکز وزنی گروه نزدیک به prev_y با درون‌یابی زیر-پیکسلی"""
+        groups = split_groups(rows)
+        closest = min(groups, key=lambda g: abs(np.mean(g) - prev_y))
+        # مرکز وزنی: پیکسل‌های نزدیک‌تر به prev_y وزن بیشتری دارن
+        arr_g = np.array(closest, dtype=float)
+        weights = 1.0 / (np.abs(arr_g - prev_y) + 1.0)
+        return float(np.sum(arr_g * weights) / np.sum(weights))
+
     rows = np.flatnonzero(cleaned[:, start_col])
     if len(rows) == 0:
         return ys
-    groups = split_groups(rows)
-    closest = min(groups, key=lambda g: abs(np.mean(g) - start_y))
-    ys[start_col] = np.mean(closest)
+    ys[start_col] = get_subpixel_center(rows, start_y)
     prev_y = ys[start_col]
 
     for x in range(start_col + 1, w):
         rows = np.flatnonzero(cleaned[:, x])
         if len(rows) == 0:
             continue
-        groups = split_groups(rows)
-        closest = min(groups, key=lambda g: abs(np.mean(g) - prev_y))
-        ys[x] = np.mean(closest)
+        ys[x] = get_subpixel_center(rows, prev_y)
         prev_y = ys[x]
 
     prev_y = ys[start_col]
@@ -240,9 +259,7 @@ def track_nearest_np(cleaned, start_y):
         rows = np.flatnonzero(cleaned[:, x])
         if len(rows) == 0:
             continue
-        groups = split_groups(rows)
-        closest = min(groups, key=lambda g: abs(np.mean(g) - prev_y))
-        ys[x] = np.mean(closest)
+        ys[x] = get_subpixel_center(rows, prev_y)
         prev_y = ys[x]
 
     return ys
@@ -277,8 +294,8 @@ def fill_short_gaps(ys, max_gap_ratio=0.03):
     return result
 
 
-def remove_isolated_spikes(ys, h, max_jump_ratio=0.20):
-    """حذف اسپایک‌های منفرد (بدون تغییر)"""
+def remove_isolated_spikes(ys, h, max_jump_ratio=0.15):
+    """آستانه سختگیرانه‌تر برای حذف اسپایک"""
     ys = ys.copy()
     w = len(ys)
     threshold = h * max_jump_ratio
@@ -311,22 +328,31 @@ def remove_isolated_spikes(ys, h, max_jump_ratio=0.20):
     return ys
 
 
-def smooth_subpixel(ys, window=5):
-    """هموارسازی median سبک (بدون تغییر)"""
+def savitzky_golay_smooth(ys, window=9, polyorder=2):
+    """
+    هموارسازی Savitzky-Golay که اسپایک‌های واقعی رو حفظ می‌کنه
+    """
     valid = np.isfinite(ys)
     if valid.sum() < window:
         return ys
-    out = ys.copy()
+
+    # نقاط NaN رو پر کن
+    xs = np.arange(len(ys))
+    ys_filled = np.interp(xs, xs[valid], ys[valid])
+
+    # ضرایب SG
     half = window // 2
-    for i in range(len(ys)):
-        if not np.isfinite(ys[i]):
-            continue
-        lo = max(0, i - half)
-        hi = min(len(ys), i + half + 1)
-        seg = ys[lo:hi]
-        seg = seg[np.isfinite(seg)]
-        if len(seg) >= 3:
-            out[i] = np.median(seg)
+    x = np.arange(-half, half + 1)
+    A = np.vander(x, polyorder + 1)
+    coeffs = np.linalg.pinv(A)[0]  # ضریب اولین جمله (مقدار در مرکز)
+
+    out = ys_filled.copy()
+    for i in range(half, len(ys) - half):
+        seg = ys_filled[i - half:i + half + 1]
+        out[i] = np.dot(coeffs, seg)
+
+    # نقاط اصلی NaN رو حفظ کن
+    out[~valid] = np.nan
     return out
 
 
@@ -347,9 +373,10 @@ def extract_trace(mask):
     x_raw = xs_arr[valid_raw]
     y_raw = ys_raw_full[valid_raw]
 
+    # ===== بهبود دقت =====
     ys = fill_short_gaps(ys_raw_full, max_gap_ratio=0.03)
-    ys = remove_isolated_spikes(ys, h, max_jump_ratio=0.20)
-    ys = smooth_subpixel(ys, window=5)
+    ys = remove_isolated_spikes(ys, h, max_jump_ratio=0.15)
+    ys = savitzky_golay_smooth(ys, window=9, polyorder=2)
 
     valid = np.isfinite(ys)
     x_clean = xs_arr[valid]
@@ -385,9 +412,11 @@ def process_image(img_array, corners_list, calib_dict):
         x_clean, y_clean, x_raw, y_raw = extract_trace(mask)
         print(f">>> استخراج: {len(x_clean)} نقطه")
 
+        # ===== کالیبراسیون X =====
         x1 = calib['x1']; f1 = calib['f1']
         x2 = calib['x2']; f2 = calib['f2']
 
+        # ===== کالیبراسیون Y با ۳ نقطه =====
         y_top = calib['y_top']; d_top = calib['d_top']
         y_mid = calib['y_mid']; d_mid = calib['d_mid']
         y_bot = calib['y_bot']; d_bot = calib['d_bot']
