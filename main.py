@@ -1,6 +1,6 @@
 """
 استخراج دقیق منحنی S11 از عکس VNA
-نسخه پایدار با Nearest Neighbor Tracking
+نسخه پایدار با درون‌یابی دوخطی (bilinear) در rectify
 """
 from js import window
 import json
@@ -50,7 +50,11 @@ def numpy_to_pil(arr_rgb, w, h):
 
 
 def perspective_rectify_pil(pil_img, corners):
-    """تصحیح پرسپکتیو با درون‌یابی دوخطی"""
+    """
+    تصحیح پرسپکتیو با درون‌یابی دوخطی (bilinear)
+    - دقت بالاتر از nearest neighbor
+    - بدون تغییر در ساختار هوموگرافی
+    """
     tl, tr, br, bl = corners
     width_a = np.linalg.norm(np.array(br) - np.array(bl))
     width_b = np.linalg.norm(np.array(tr) - np.array(tl))
@@ -94,8 +98,10 @@ def perspective_rectify_pil(pil_img, corners):
     xs_f = src_coords[0, :].reshape(out_h, out_w)
     ys_f = src_coords[1, :].reshape(out_h, out_w)
 
+    # ===== درون‌یابی دوخطی (Bilinear) =====
     arr = np.array(pil_img).astype(np.float32)
     h_img, w_img = arr.shape[:2]
+
     xs_f = np.clip(xs_f, 0, w_img - 1.001)
     ys_f = np.clip(ys_f, 0, h_img - 1.001)
 
@@ -107,8 +113,10 @@ def perspective_rectify_pil(pil_img, corners):
     wx = (xs_f - x0)[..., None]
     wy = (ys_f - y0)[..., None]
 
-    c00 = arr[y0, x0]; c10 = arr[y0, x1]
-    c01 = arr[y1, x0]; c11 = arr[y1, x1]
+    c00 = arr[y0, x0]
+    c10 = arr[y0, x1]
+    c01 = arr[y1, x0]
+    c11 = arr[y1, x1]
 
     out_arr = (c00 * (1 - wx) * (1 - wy) +
                c10 * wx * (1 - wy) +
@@ -119,17 +127,24 @@ def perspective_rectify_pil(pil_img, corners):
 
 
 def detect_yellow_trace_np(rgb_arr):
-    """تشخیص زرد با آستانه‌گذاری ثابت"""
+    """
+    تشخیص زرد با آستانه‌گذاری ثابت + دو شرط اضافه برای کاهش نویز
+    بدون تغییر در ساختار کلی
+    """
     r = rgb_arr[:, :, 0].astype(np.int16)
     g = rgb_arr[:, :, 1].astype(np.int16)
     b = rgb_arr[:, :, 2].astype(np.int16)
 
     mask = (
-        (r > 100) & (g > 80) & (b < 120) &
-        (r > b + 30) & (g > b + 20) &
+        (r > 100) &
+        (g > 80) &
+        (b < 120) &
+        (r > b + 30) &
+        (g > b + 20) &
         (np.abs(r - g) < 80) &
-        ((r + g) / 2 - b > 50) &
-        ((r + g + b) > 200)
+        # ===== دو شرط اضافه برای کاهش نویز =====
+        ((r + g) / 2 - b > 50) &    # زرد بودن واضح‌تر
+        ((r + g + b) > 200)          # جلوگیری از پیکسل‌های تاریک
     )
     return mask.astype(np.uint8)
 
@@ -164,10 +179,6 @@ def remove_small_components_np(mask, min_width_ratio=0.02):
     return output
 
 
-# ============================================================
-#          Nearest Neighbor Tracking
-# ============================================================
-
 def find_curve_center_y_np(cleaned):
     h, w = cleaned.shape
     ys = []
@@ -196,7 +207,7 @@ def split_groups(rows, gap=3):
 
 
 def track_nearest_np(cleaned, start_y):
-    """ردیابی منحنی با میانگین گروه نزدیک (Nearest Neighbor)"""
+    """ردیابی منحنی با میانگین گروه نزدیک (بدون تغییر)"""
     h, w = cleaned.shape
     ys = np.full(w, np.nan, dtype=float)
     start_col = None
@@ -267,7 +278,7 @@ def fill_short_gaps(ys, max_gap_ratio=0.03):
 
 
 def remove_isolated_spikes(ys, h, max_jump_ratio=0.20):
-    """حذف اسپایک‌های منفرد"""
+    """حذف اسپایک‌های منفرد (بدون تغییر)"""
     ys = ys.copy()
     w = len(ys)
     threshold = h * max_jump_ratio
@@ -301,7 +312,7 @@ def remove_isolated_spikes(ys, h, max_jump_ratio=0.20):
 
 
 def smooth_subpixel(ys, window=5):
-    """هموارسازی median سبک"""
+    """هموارسازی median سبک (بدون تغییر)"""
     valid = np.isfinite(ys)
     if valid.sum() < window:
         return ys
@@ -319,8 +330,7 @@ def smooth_subpixel(ys, window=5):
     return out
 
 
-def extract_trace(mask, **kwargs):
-    """استخراج مسیر با Nearest Neighbor"""
+def extract_trace(mask):
     h, w = mask.shape
     cleaned = remove_small_components_np(mask, min_width_ratio=0.02)
     if cleaned.sum() < 30:
@@ -352,7 +362,7 @@ def extract_trace(mask, **kwargs):
 # ============================================================
 
 def process_image(img_array, corners_list, calib_dict):
-    print(">>> process_image فراخوانی شد (Nearest Neighbor)")
+    print(">>> process_image فراخوانی شد")
     try:
         calib = calib_dict.to_py() if hasattr(calib_dict, 'to_py') else calib_dict
         corners_js = corners_list.to_py() if hasattr(corners_list, 'to_py') else corners_list
@@ -366,7 +376,7 @@ def process_image(img_array, corners_list, calib_dict):
 
         corners = np.array(corners_js, dtype=float)
         rectified_pil = perspective_rectify_pil(pil_img, corners)
-        print(">>> rectify انجام شد")
+        print(">>> rectify انجام شد (bilinear)")
 
         rectified_rgb = np.array(rectified_pil)
         mask = detect_yellow_trace_np(rectified_rgb)
@@ -375,11 +385,9 @@ def process_image(img_array, corners_list, calib_dict):
         x_clean, y_clean, x_raw, y_raw = extract_trace(mask)
         print(f">>> استخراج: {len(x_clean)} نقطه")
 
-        # کالیبراسیون X
         x1 = calib['x1']; f1 = calib['f1']
         x2 = calib['x2']; f2 = calib['f2']
 
-        # کالیبراسیون Y با ۳ نقطه
         y_top = calib['y_top']; d_top = calib['d_top']
         y_mid = calib['y_mid']; d_mid = calib['d_mid']
         y_bot = calib['y_bot']; d_bot = calib['d_bot']
@@ -429,4 +437,4 @@ def process_image(img_array, corners_list, calib_dict):
 
 
 window.process_image = process_image
-print(">>> process_image به window وصل شد ✅ (Nearest Neighbor)")
+print(">>> process_image به window وصل شد ✅")
