@@ -1,6 +1,6 @@
 """
 استخراج دقیق منحنی S11 از عکس VNA
-نسخه نهایی وب - با JSON output
+نسخه نهایی وب - با JSON output و db_step
 """
 import pyodide_js
 from js import window
@@ -8,25 +8,39 @@ import json
 
 print(">>> main.py شروع به اجرا کرد")
 
-
 # ============================================================
-#          نصب micropip و پکیج‌ها
+#          نصب micropip و پکیج‌ها (با نمایش وضعیت روی UI)
 # ============================================================
-print(">>> نصب micropip از طریق pyodide_js...")
-await pyodide_js.loadPackage("micropip")
-print(">>> micropip نصب شد ✅")
+window.markLibLoading("pyodide")
+try:
+    await pyodide_js.loadPackage("micropip")
+    window.markLibOk("pyodide")
+    print(">>> micropip نصب شد ✅")
+except Exception as e:
+    window.markLibError("pyodide")
+    print(f">>> خطا در micropip: {e}")
 
 import micropip
 
-print(">>> نصب پکیج‌های دیگر...")
-packages = ["numpy", "opencv-python", "pandas", "openpyxl", "scipy"]
-for pkg in packages:
+# نقشه نام پکیج → نام نمایشی
+PKG_MAP = [
+    ("numpy",          "numpy"),
+    ("opencv-python",  "opencv"),
+    ("pandas",         "pandas"),
+    ("openpyxl",       "openpyxl"),
+    ("scipy",          "scipy"),
+]
+
+for pkg_name, display_name in PKG_MAP:
     try:
-        print(f">>> نصب {pkg}...")
-        await micropip.install(pkg)
-        print(f">>> {pkg} نصب شد ✅")
+        window.markLibLoading(display_name)
+        print(f">>> نصب {pkg_name}...")
+        await micropip.install(pkg_name)
+        window.markLibOk(display_name)
+        print(f">>> {pkg_name} نصب شد ✅")
     except Exception as e:
-        print(f">>> خطا در نصب {pkg}: {e}")
+        window.markLibError(display_name)
+        print(f">>> خطا در نصب {pkg_name}: {e}")
 
 print(">>> همه پکیج‌ها نصب شدند")
 
@@ -53,16 +67,42 @@ def perspective_rectify(image_bgr, corners):
     dst = np.array([[0, 0], [width - 1, 0],
                     [width - 1, height - 1], [0, height - 1]], dtype=np.float32)
     matrix = cv2.getPerspectiveTransform(corners.astype(np.float32), dst)
-    return cv2.warpPerspective(image_bgr, matrix, (width, height))
+    # از درون‌یابی مکعبی برای دقت بالاتر استفاده می‌کنیم
+    return cv2.warpPerspective(image_bgr, matrix, (width, height),
+                                flags=cv2.INTER_CUBIC)
 
 
 def detect_yellow_trace(image_bgr):
-    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
-    lower = np.array([10, 35, 75], dtype=np.uint8)
-    upper = np.array([48, 255, 255], dtype=np.uint8)
-    mask = cv2.inRange(hsv, lower, upper)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    """
+    تشخیص منحنی زرد با دقت بالا:
+    - استفاده از HSV با دو بازه (زرد روشن + زرد تیره)
+    - فیلتر morphologic پیشرفته
+    """
+    # افزایش کیفیت: blur ملایم قبل از HSV
+    blurred = cv2.GaussianBlur(image_bgr, (3, 3), 0)
+    hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+
+    # بازه اصلی زرد
+    lower1 = np.array([12, 40, 80], dtype=np.uint8)
+    upper1 = np.array([45, 255, 255], dtype=np.uint8)
+    mask1 = cv2.inRange(hsv, lower1, upper1)
+
+    # بازه مکمل برای زرد کم‌رنگ
+    lower2 = np.array([20, 25, 60], dtype=np.uint8)
+    upper2 = np.array([40, 255, 255], dtype=np.uint8)
+    mask2 = cv2.inRange(hsv, lower2, upper2)
+
+    mask = cv2.bitwise_or(mask1, mask2)
+
+    # فیلتر نویز
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
+                             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2)))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE,
+                             cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+
+    # اتصال خطوط قطع‌شده افقی
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE,
+                             cv2.getStructuringElement(cv2.MORPH_RECT, (5, 1)))
     return mask
 
 
@@ -205,6 +245,27 @@ def remove_isolated_spikes(ys, h, max_jump_ratio=0.20):
     return ys
 
 
+def smooth_subpixel(ys, window=5):
+    """
+    هموارسازی Savitzky-Golay سبک روی مسیر (بدون تغییر نقاط کلیدی)
+    """
+    valid = np.isfinite(ys)
+    if valid.sum() < window:
+        return ys
+    out = ys.copy()
+    half = window // 2
+    for i in range(len(ys)):
+        if not np.isfinite(ys[i]):
+            continue
+        lo = max(0, i - half)
+        hi = min(len(ys), i + half + 1)
+        seg = ys[lo:hi]
+        seg = seg[np.isfinite(seg)]
+        if len(seg) >= 3:
+            out[i] = np.median(seg)
+    return out
+
+
 def extract_trace(mask):
     h, w = mask.shape
     cleaned = remove_small_components(mask, min_width_ratio=0.02)
@@ -219,8 +280,12 @@ def extract_trace(mask):
     valid_raw = np.isfinite(ys_raw_full)
     x_raw = xs_arr[valid_raw]
     y_raw = ys_raw_full[valid_raw]
+
+    # بهبود دقت: پر کردن شکاف‌ها، حذف اسپایک، هموارسازی
     ys = fill_short_gaps(ys_raw_full, max_gap_ratio=0.03)
     ys = remove_isolated_spikes(ys, h, max_jump_ratio=0.20)
+    ys = smooth_subpixel(ys, window=5)
+
     valid = np.isfinite(ys)
     x_clean = xs_arr[valid]
     y_clean = ys[valid]
@@ -234,52 +299,55 @@ def extract_trace(mask):
 def process_image(img_array, corners_list, calib_dict):
     print(">>> process_image فراخوانی شد")
     try:
-        # ===== تبدیل JsProxy به Python =====
         calib = calib_dict.to_py() if hasattr(calib_dict, 'to_py') else calib_dict
         corners_js = corners_list.to_py() if hasattr(corners_list, 'to_py') else corners_list
-        
+
         h = window.imageHeight
         w = window.imageWidth
         print(f">>> ابعاد: {w}x{h}")
-        
+
         img_rgb = np.frombuffer(bytes(img_array), dtype=np.uint8).reshape((h, w, 3))
         img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
         print(">>> RGB→BGR انجام شد")
-        
+
         corners = np.array(corners_js, dtype=float)
         rectified = perspective_rectify(img_bgr, corners)
         print(">>> rectify انجام شد")
-        
+
         mask = detect_yellow_trace(rectified)
         print(f">>> mask: {np.count_nonzero(mask)} pixels")
-        
+
         x_clean, y_clean, x_raw, y_raw = extract_trace(mask)
         print(f">>> استخراج: {len(x_clean)} نقطه")
-        
+
         x1 = calib['x1']; f1 = calib['f1']
         x2 = calib['x2']; f2 = calib['f2']
         y1 = calib['y1']; d1 = calib['d1']
         y2 = calib['y2']; d2 = calib['d2']
-        
+
+        # db_step از UI (فقط برای اعتبارسنجی و لاگ)
+        db_step = float(calib.get('db_step', 10))
+        print(f">>> db_step = {db_step}")
+
         frequency = f1 + (x_clean - x1) * (f2 - f1) / (x2 - x1)
         amplitude_db = d1 + (y_clean - y1) * (d2 - d1) / (y2 - y1)
-        
+
         lo, hi = sorted((f1, f2))
         valid = (frequency >= lo) & (frequency <= hi)
         frequency = frequency[valid]
         amplitude_db = amplitude_db[valid]
-        
+
         print(f">>> نتیجه: {len(frequency)} نقطه")
-        
-        # ===== برگرداندن به صورت رشته JSON =====
+
         result_json = json.dumps({
             'frequency': frequency.tolist(),
             'amplitude': amplitude_db.tolist(),
             'x_raw': x_raw.tolist(),
             'y_raw': y_raw.tolist(),
+            'db_step': db_step,
         })
         return result_json
-        
+
     except Exception as e:
         print(f">>> خطا: {e}")
         import traceback

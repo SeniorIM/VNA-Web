@@ -38,7 +38,7 @@
         }
         .inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
         .inputs label { font-size: 11px; color: #aaa; display: block; }
-        .inputs input {
+        .inputs input, .inputs select {
             width: 100%; padding: 8px; border: 1px solid #555;
             border-radius: 6px; background: #1a1a1a; color: #fff; text-align: center;
         }
@@ -47,11 +47,79 @@
             padding: 6px; background: #1a1a1a; border-radius: 6px; margin-top: 6px;
         }
         #plotCanvas { width: 100%; background: #fff; border-radius: 8px; display: block; }
+
+        /* === پنل وضعیت کتابخانه‌ها === */
+        #libStatusPanel {
+            background: #0d1b2a;
+            border: 1px solid #1b4965;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 10px;
+            font-size: 12px;
+        }
+        #libStatusPanel .lib-header {
+            display: flex; justify-content: space-between; align-items: center;
+            color: #4fc3f7; font-weight: bold; margin-bottom: 6px;
+        }
+        #libStatusPanel .lib-list {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+        }
+        .lib-item {
+            display: flex; align-items: center; gap: 6px;
+            padding: 4px 6px; border-radius: 4px;
+            background: #1a2a3a; font-size: 11px;
+        }
+        .lib-item.ok { color: #4caf50; }
+        .lib-item.loading { color: #ffd54f; }
+        .lib-item.error { color: #f44336; }
+        .lib-item.pending { color: #888; }
+        .lib-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #888; flex-shrink: 0;
+        }
+        .lib-item.ok .lib-dot { background: #4caf50; box-shadow: 0 0 6px #4caf50; }
+        .lib-item.loading .lib-dot { background: #ffd54f; animation: pulse 1s infinite; }
+        .lib-item.error .lib-dot { background: #f44336; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+        #globalStatus {
+            text-align: center; font-weight: bold; padding: 6px;
+            margin-top: 8px; border-radius: 6px; font-size: 13px;
+        }
+        #globalStatus.waiting { color: #ffd54f; background: #3a2a1a; }
+        #globalStatus.ready { color: #4caf50; background: #1a3a1a; }
+        #globalStatus.error { color: #f44336; background: #3a1a1a; }
+
+        /* === پیش‌نمایش تصویر نهایی پس از adjustment === */
+        #previewAdjust {
+            width: 100%; border-radius: 8px; margin-top: 8px; display: none;
+        }
+        details { margin-top: 6px; }
+        summary { cursor: pointer; color: #4fc3f7; font-size: 12px; padding: 4px; }
     </style>
 </head>
 <body>
 
 <h1>📊 VNA Curve Extractor</h1>
+
+<!-- ============ پنل وضعیت کتابخانه‌ها ============ -->
+<div id="libStatusPanel">
+    <div class="lib-header">
+        <span>🔌 وضعیت کتابخانه‌ها</span>
+        <span id="libProgress">0/6</span>
+    </div>
+    <div class="lib-list" id="libList">
+        <div class="lib-item pending" data-lib="pyodide"><span class="lib-dot"></span>Pyodide</div>
+        <div class="lib-item pending" data-lib="numpy"><span class="lib-dot"></span>NumPy</div>
+        <div class="lib-item pending" data-lib="opencv"><span class="lib-dot"></span>OpenCV</div>
+        <div class="lib-item pending" data-lib="pandas"><span class="lib-dot"></span>Pandas</div>
+        <div class="lib-item pending" data-lib="openpyxl"><span class="lib-dot"></span>OpenPyXL</div>
+        <div class="lib-item pending" data-lib="scipy"><span class="lib-dot"></span>SciPy</div>
+    </div>
+    <div id="globalStatus" class="waiting">⏳ در حال آماده‌سازی...</div>
+</div>
 
 <div class="card">
     <h2>مرحله 1: انتخاب تصویر</h2>
@@ -60,6 +128,23 @@
         📷 انتخاب عکس
     </button>
     <div class="status" id="status1">منتظر انتخاب تصویر...</div>
+
+    <!-- تنظیمات Adjustment -->
+    <details open>
+        <summary>⚙️ تنظیمات تصویر (Adjustment)</summary>
+        <div class="inputs" style="margin-top:6px;">
+            <div><label>Brightness</label><input type="number" id="adjBrightness" value="-100" step="5"></div>
+            <div><label>Exposure</label><input type="number" id="adjExposure" value="100" step="5"></div>
+            <div><label>Contrast</label><input type="number" id="adjContrast" value="100" step="5"></div>
+            <div><label>Highlights</label><input type="number" id="adjHighlights" value="100" step="5"></div>
+            <div><label>Shadows</label><input type="number" id="adjShadows" value="100" step="5"></div>
+            <div><label>Saturation</label><input type="number" id="adjSaturation" value="100" step="5"></div>
+            <div><label>Sharpness</label><input type="number" id="adjSharpness" value="50" step="5"></div>
+        </div>
+        <button class="btn btn-warning" onclick="applyAdjustAndReload()" style="margin-top:6px; font-size:12px; padding:8px;">
+            🔄 اعمال Adjustment روی تصویر
+        </button>
+    </details>
 </div>
 
 <div class="card" id="clickCard" style="display:none">
@@ -80,6 +165,21 @@
         <div><label>Y1 (dB)</label><input type="number" id="d1" value="0" step="any"></div>
         <div><label>Y2 (dB)</label><input type="number" id="d2" value="-30" step="any"></div>
     </div>
+
+    <!-- ==== جدید: انتخاب گام dB ==== -->
+    <div style="margin-top:10px;">
+        <label style="font-size:12px; color:#aaa; display:block; margin-bottom:4px;">
+            گام خطوط افقی محور عمودی (dB):
+        </label>
+        <select id="dbStep" style="width:100%; padding:10px; border-radius:6px; background:#1a1a1a; color:#fff; border:1px solid #555;">
+            <option value="10" selected>10 dB</option>
+            <option value="20">20 dB</option>
+            <option value="30">30 dB</option>
+            <option value="5">5 dB</option>
+            <option value="1">1 dB</option>
+        </select>
+    </div>
+
     <button class="btn btn-success" id="extractBtn" onclick="runExtraction()" style="margin-top:10px">
         ⚡ استخراج
     </button>
@@ -96,10 +196,152 @@
 </div>
 
 <script>
+// ============================================================
+//   پنل وضعیت کتابخانه‌ها
+// ============================================================
+const LIB_TOTAL = 6;
+let libDone = 0;
+
+function updateLibStatus(name, state, msg) {
+    const el = document.querySelector(`.lib-item[data-lib="${name}"]`);
+    if (!el) return;
+    el.classList.remove('pending', 'loading', 'ok', 'error');
+    el.classList.add(state);
+    if (msg) {
+        el.innerHTML = `<span class="lib-dot"></span>${msg}`;
+    }
+    if (state === 'ok') {
+        libDone = document.querySelectorAll('.lib-item.ok').length;
+        document.getElementById('libProgress').textContent = `${libDone}/${LIB_TOTAL}`;
+        if (libDone >= LIB_TOTAL) {
+            const g = document.getElementById('globalStatus');
+            g.className = 'ready';
+            g.textContent = '✅ همه کتابخانه‌ها وصل شدند — آماده استخراج';
+        }
+    }
+    if (state === 'error') {
+        const g = document.getElementById('globalStatus');
+        g.className = 'error';
+        g.textContent = `❌ خطا در بارگذاری ${name}`;
+    }
+}
+
+// پل ارتباطی بین Python و JS
+window.updateLibStatus = updateLibStatus;
+
+// علامت‌گذاری شروع
+window.markLibLoading = (name) => updateLibStatus(name, 'loading', name + '...');
+window.markLibOk = (name) => updateLibStatus(name, 'ok', name + ' ✅');
+window.markLibError = (name) => updateLibStatus(name, 'error', name + ' ❌');
+
+// ============================================================
+//   Adjustment تصویر
+// ============================================================
+function applyAdjustments(img, adj) {
+    const c = document.createElement('canvas');
+    c.width = img.width; c.height = img.height;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+
+    const imgData = ctx.getImageData(0, 0, c.width, c.height);
+    const d = imgData.data;
+
+    // نرمال‌سازی مقادیر: -100..100 → ضرایب
+    const brightness = adj.brightness / 100;       // -1..1
+    const exposure   = Math.pow(2, adj.exposure / 100); // 0.5..2
+    const contrastF  = 1 + adj.contrast / 100;     // 0..2
+    const highlights = adj.highlights / 100;       // 0..1 (100 → 1)
+    const shadows    = adj.shadows / 100;          // 0..1
+    const saturation = 1 + adj.saturation / 100;   // 0..2
+
+    // ====== Pass 1: Brightness + Exposure + Contrast + Highlights/Shadows + Saturation ======
+    for (let i = 0; i < d.length; i += 4) {
+        let r = d[i], g = d[i+1], b = d[i+2];
+
+        // Exposure (ضرب نمایی)
+        r *= exposure; g *= exposure; b *= exposure;
+
+        // Brightness (جمع)
+        r += brightness * 255; g += brightness * 255; b += brightness * 255;
+
+        // Highlights: کاهش/افزایش نواحی روشن
+        if (highlights !== 1) {
+            const lum = 0.299*r + 0.587*g + 0.114*b;
+            const t = Math.min(1, lum / 255);
+            const factor = 1 - highlights * t * 0.5;
+            r *= factor; g *= factor; b *= factor;
+        }
+        // Shadows: افزایش/کاهش نواحی تاریک
+        if (shadows !== 1) {
+            const lum = 0.299*r + 0.587*g + 0.114*b;
+            const t = 1 - Math.min(1, lum / 255);
+            const add = shadows * t * 60;
+            r += add; g += add; b += add;
+        }
+
+        // Contrast حول نقطه 128
+        r = (r - 128) * contrastF + 128;
+        g = (g - 128) * contrastF + 128;
+        b = (b - 128) * contrastF + 128;
+
+        // Saturation
+        const gray = 0.299*r + 0.587*g + 0.114*b;
+        r = gray + (r - gray) * saturation;
+        g = gray + (g - gray) * saturation;
+        b = gray + (b - gray) * saturation;
+
+        d[i]   = Math.max(0, Math.min(255, r));
+        d[i+1] = Math.max(0, Math.min(255, g));
+        d[i+2] = Math.max(0, Math.min(255, b));
+    }
+    ctx.putImageData(imgData, 0, 0);
+
+    // ====== Pass 2: Sharpness (unsharp mask) ======
+    const sharpAmount = adj.sharpness / 100; // 0..0.5
+    if (sharpAmount > 0.01) {
+        const w = c.width, h = c.height;
+        const src = ctx.getImageData(0, 0, w, h).data;
+        const blurred = new Uint8ClampedArray(src.length);
+        // blur 3x3 box
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                let rr=0, gg=0, bb=0, cnt=0;
+                for (let dy=-1; dy<=1; dy++) {
+                    for (let dx=-1; dx<=1; dx++) {
+                        const nx = x+dx, ny = y+dy;
+                        if (nx>=0 && nx<w && ny>=0 && ny<h) {
+                            const idx = (ny*w + nx)*4;
+                            rr += src[idx]; gg += src[idx+1]; bb += src[idx+2]; cnt++;
+                        }
+                    }
+                }
+                const i = (y*w + x)*4;
+                blurred[i] = rr/cnt; blurred[i+1] = gg/cnt; blurred[i+2] = bb/cnt; blurred[i+3] = 255;
+            }
+        }
+        const out = ctx.createImageData(w, h);
+        for (let i = 0; i < src.length; i += 4) {
+            out.data[i]   = Math.max(0, Math.min(255, src[i]   + sharpAmount * (src[i]   - blurred[i])));
+            out.data[i+1] = Math.max(0, Math.min(255, src[i+1] + sharpAmount * (src[i+1] - blurred[i+1])));
+            out.data[i+2] = Math.max(0, Math.min(255, src[i+2] + sharpAmount * (src[i+2] - blurred[i+2])));
+            out.data[i+3] = 255;
+        }
+        ctx.putImageData(out, 0, 0);
+    }
+
+    return c;
+}
+
+// ============================================================
+//   STATE
+// ============================================================
 const STATE = {
-    image: null, imageWidth: 0, imageHeight: 0,
+    image: null,           // تصویر اصلی (خام)
+    imageAdjusted: null,   // تصویر پس از adjustment (canvas)
+    imageWidth: 0, imageHeight: 0,
     clickStep: 0, corners: [], xPoints: [], yPoints: [],
-    allClicks: [], result: null
+    allClicks: [], result: null,
+    adjValues: { brightness:-100, exposure:100, contrast:100, highlights:100, shadows:100, saturation:100, sharpness:50 }
 };
 
 const STEPS_TEXT = [
@@ -114,6 +356,9 @@ const STEPS_TEXT = [
     'روی -30 dB کلیک کنید',
 ];
 
+// ============================================================
+//   بارگذاری فایل
+// ============================================================
 document.getElementById('fileInput').addEventListener('change', function(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -126,27 +371,56 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
             STATE.imageHeight = img.height;
             window.imageWidth = img.width;
             window.imageHeight = img.height;
-            
-            const canvas = document.getElementById('canvas');
-            canvas.width = img.width;
-            canvas.height = img.height;
-            canvas.getContext('2d').drawImage(img, 0, 0);
-            
-            STATE.clickStep = 1;
-            STATE.corners = []; STATE.xPoints = []; STATE.yPoints = [];
-            STATE.allClicks = [];
-            
-            document.getElementById('clickCard').style.display = 'block';
-            document.getElementById('valuesCard').style.display = 'none';
-            document.getElementById('resultCard').style.display = 'none';
-            document.getElementById('status1').textContent = `✅ ${img.width}×${img.height}`;
-            document.getElementById('stepInfo').textContent = STEPS_TEXT[1];
+
+            // اعمال adjustment اولیه با مقادیر پیش‌فرض
+            readAdjValuesFromUI();
+            applyAdjustAndReload(true);
         };
         img.src = ev.target.result;
     };
     reader.readAsDataURL(file);
 });
 
+function readAdjValuesFromUI() {
+    STATE.adjValues = {
+        brightness: parseFloat(document.getElementById('adjBrightness').value) || 0,
+        exposure:   parseFloat(document.getElementById('adjExposure').value) || 0,
+        contrast:   parseFloat(document.getElementById('adjContrast').value) || 0,
+        highlights: parseFloat(document.getElementById('adjHighlights').value) || 0,
+        shadows:    parseFloat(document.getElementById('adjShadows').value) || 0,
+        saturation: parseFloat(document.getElementById('adjSaturation').value) || 0,
+        sharpness:  parseFloat(document.getElementById('adjSharpness').value) || 0,
+    };
+}
+
+function applyAdjustAndReload(silent) {
+    if (!STATE.image) {
+        if (!silent) alert('اول یک تصویر انتخاب کنید.');
+        return;
+    }
+    readAdjValuesFromUI();
+    STATE.imageAdjusted = applyAdjustments(STATE.image, STATE.adjValues);
+
+    const canvas = document.getElementById('canvas');
+    canvas.width = STATE.imageAdjusted.width;
+    canvas.height = STATE.imageAdjusted.height;
+    canvas.getContext('2d').drawImage(STATE.imageAdjusted, 0, 0);
+
+    STATE.clickStep = 1;
+    STATE.corners = []; STATE.xPoints = []; STATE.yPoints = [];
+    STATE.allClicks = [];
+
+    document.getElementById('clickCard').style.display = 'block';
+    document.getElementById('valuesCard').style.display = 'none';
+    document.getElementById('resultCard').style.display = 'none';
+    document.getElementById('status1').textContent =
+        `✅ ${STATE.imageAdjusted.width}×${STATE.imageAdjusted.height} (با Adjustment)`;
+    document.getElementById('stepInfo').textContent = STEPS_TEXT[1];
+}
+
+// ============================================================
+//   کلیک روی canvas
+// ============================================================
 document.getElementById('canvas').addEventListener('click', function(e) {
     if (STATE.clickStep < 1) return;
     const canvas = document.getElementById('canvas');
@@ -206,7 +480,7 @@ function undoLastPoint() {
     else if (last.step === 5 || last.step === 6) STATE.xPoints.pop();
     else if (last.step === 7 || last.step === 8) STATE.yPoints.pop();
     const canvas = document.getElementById('canvas');
-    canvas.getContext('2d').drawImage(STATE.image, 0, 0);
+    canvas.getContext('2d').drawImage(STATE.imageAdjusted, 0, 0);
     redrawAllMarkers();
 }
 
@@ -228,19 +502,22 @@ function redrawAllMarkers() {
 function resetClicks() {
     STATE.clickStep = 1;
     STATE.corners = []; STATE.xPoints = []; STATE.yPoints = []; STATE.allClicks = [];
-    document.getElementById('canvas').getContext('2d').drawImage(STATE.image, 0, 0);
+    document.getElementById('canvas').getContext('2d').drawImage(STATE.imageAdjusted, 0, 0);
     document.getElementById('stepInfo').textContent = STEPS_TEXT[1];
     document.getElementById('valuesCard').style.display = 'none';
     document.getElementById('resultCard').style.display = 'none';
 }
 
+// ============================================================
+//   استخراج
+// ============================================================
 async function runExtraction() {
     if (typeof window.process_image !== 'function') {
-        document.getElementById('status3').textContent = 
-            '⏳ لطفاً ۳۰ ثانیه صبر کنید (نصب پکیج‌ها)';
+        document.getElementById('status3').textContent =
+            '⏳ لطفاً صبر کنید (نصب پکیج‌ها)';
         return;
     }
-    
+
     document.getElementById('status3').textContent = '⏳ در حال استخراج...';
     document.getElementById('extractBtn').disabled = true;
     try {
@@ -253,14 +530,14 @@ async function runExtraction() {
             y1: STATE.yPoints[0].y,
             d1: parseFloat(document.getElementById('d1').value),
             y2: STATE.yPoints[1].y,
-            d2: parseFloat(document.getElementById('d2').value)
+            d2: parseFloat(document.getElementById('d2').value),
+            db_step: parseFloat(document.getElementById('dbStep').value) // ← جدید
         };
-        const imgArray = await imageToArray(STATE.image);
-        
+        const imgArray = await imageToArray(STATE.imageAdjusted);
+
         // ===== فراخوانی تابع پایتون =====
         let resultRaw = await window.process_image(imgArray, corners, calib);
-        
-        // ===== تبدیل رشته JSON به Object =====
+
         let result;
         if (typeof resultRaw === 'string') {
             result = JSON.parse(resultRaw);
@@ -269,7 +546,7 @@ async function runExtraction() {
         } else {
             result = resultRaw;
         }
-        
+
         STATE.result = result;
         showResult(result);
         document.getElementById('status3').textContent = `✅ ${result.frequency.length} نقطه`;
@@ -280,17 +557,18 @@ async function runExtraction() {
     document.getElementById('extractBtn').disabled = false;
 }
 
-function imageToArray(img) {
+// تبدیل canvas به آرایه Uint8 RGB
+function imageToArray(imgOrCanvas) {
     return new Promise((resolve) => {
         const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
+        canvas.width = imgOrCanvas.width;
+        canvas.height = imgOrCanvas.height;
         const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0);
-        const imgData = ctx.getImageData(0, 0, img.width, img.height);
+        ctx.drawImage(imgOrCanvas, 0, 0);
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const data = imgData.data;
-        const arr = new Uint8Array(img.width * img.height * 3);
-        for (let i = 0; i < img.width * img.height; i++) {
+        const arr = new Uint8Array(canvas.width * canvas.height * 3);
+        for (let i = 0; i < canvas.width * canvas.height; i++) {
             arr[i * 3] = data[i * 4];
             arr[i * 3 + 1] = data[i * 4 + 1];
             arr[i * 3 + 2] = data[i * 4 + 2];
@@ -301,7 +579,7 @@ function imageToArray(img) {
 
 function showResult(result) {
     document.getElementById('resultCard').style.display = 'block';
-    document.getElementById('status4').textContent = 
+    document.getElementById('status4').textContent =
         `${result.frequency.length} نقطه`;
     const canvas = document.getElementById('plotCanvas');
     const ctx = canvas.getContext('2d');
