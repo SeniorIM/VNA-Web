@@ -79,7 +79,6 @@
         details { margin-top: 8px; }
         summary { cursor: pointer; color: #4fc3f7; font-size: 15px; padding: 6px; }
 
-        /* ===== دکمه‌های کمکی ===== */
         .helper-tip {
             background: #1a2a3a;
             color: #4fc3f7;
@@ -108,12 +107,12 @@
     <details open>
         <summary>⚙️ تنظیمات تصویر (Adjustment)</summary>
         <div class="inputs" style="margin-top:8px;">
-            <div><label>Brightness</label><input type="number" id="adjBrightness" value="-95" step="5"></div>
-            <div><label>Exposure</label><input type="number" id="adjExposure" value="98" step="5"></div>
-            <div><label>Contrast</label><input type="number" id="adjContrast" value="90" step="5"></div>
-            <div><label>Highlights</label><input type="number" id="adjHighlights" value="60" step="5"></div>
-            <div><label>Shadows</label><input type="number" id="adjShadows" value="60" step="5"></div>
-            <div><label>Saturation</label><input type="number" id="adjSaturation" value="30" step="5"></div>
+            <div><label>Brightness</label><input type="number" id="adjBrightness" value="-100" step="5"></div>
+            <div><label>Exposure</label><input type="number" id="adjExposure" value="100" step="5"></div>
+            <div><label>Contrast</label><input type="number" id="adjContrast" value="100" step="5"></div>
+            <div><label>Highlights</label><input type="number" id="adjHighlights" value="100" step="5"></div>
+            <div><label>Shadows</label><input type="number" id="adjShadows" value="100" step="5"></div>
+            <div><label>Saturation</label><input type="number" id="adjSaturation" value="100" step="5"></div>
             <div><label>Sharpness</label><input type="number" id="adjSharpness" value="50" step="5"></div>
         </div>
         <button class="btn btn-warning" onclick="applyAdjustAndReload()" style="margin-top:8px; font-size:14px; padding:10px;">
@@ -169,9 +168,24 @@
     <button class="btn btn-success" onclick="downloadExcel()" style="margin-top:10px">
         💾 دانلود Excel
     </button>
+    <button class="btn btn-warning" onclick="retryExtraction()" style="margin-top:8px">
+        🔄 دوباره استخراج (پروفایل بعدی)
+    </button>
 </div>
 
 <script>
+// ============================================================
+//   پروفایل‌های Viterbi
+// ============================================================
+const VITERBI_PROFILES = [
+    { name: 'متعادل',      LAMBDA_SMOOTH: 0.8, SIGMA_OBS: 3.0, MAX_JUMP_RATIO: 0.15 },
+    { name: 'نرم‌تر',       LAMBDA_SMOOTH: 1.5, SIGMA_OBS: 5.0, MAX_JUMP_RATIO: 0.20 },
+    { name: 'دقیق‌تر',      LAMBDA_SMOOTH: 0.4, SIGMA_OBS: 2.0, MAX_JUMP_RATIO: 0.10 },
+    { name: 'خیلی نرم',    LAMBDA_SMOOTH: 2.0, SIGMA_OBS: 7.0, MAX_JUMP_RATIO: 0.25 },
+    { name: 'خیلی دقیق',   LAMBDA_SMOOTH: 0.2, SIGMA_OBS: 1.5, MAX_JUMP_RATIO: 0.08 },
+];
+let currentProfileIdx = 0;
+
 // ============================================================
 //   کادر وضعیت
 // ============================================================
@@ -295,11 +309,11 @@ const STATE = {
     allLines: [],
     result: null,
     adjValues: {},
-    // ===== برای Drag =====
-    dragging: null,          // {lineIndex, offset}
-    dragTolerance: 15,       // فاصله پیکسلی برای تشخیص کلیک روی خط
+    dragging: null,
+    dragTolerance: 15,
     mouseDown: false,
-    mouseDownPos: null
+    mouseDownPos: null,
+    touchPending: null
 };
 
 const LINE_STEPS_TEXT = [
@@ -385,6 +399,7 @@ function applyAdjustAndReload(silent) {
 
     STATE.lineStep = 1;
     STATE.lines = []; STATE.allLines = [];
+    currentProfileIdx = 0;
 
     document.getElementById('clickCard').style.display = 'block';
     document.getElementById('valuesCard').style.display = 'none';
@@ -399,7 +414,6 @@ function applyAdjustAndReload(silent) {
 // ============================================================
 const canvas = document.getElementById('canvas');
 
-// ===== پیدا کردن خط نزدیک به نقطه کلیک =====
 function findLineAt(x, y) {
     for (let i = STATE.lines.length - 1; i >= 0; i--) {
         const line = STATE.lines[i];
@@ -412,7 +426,6 @@ function findLineAt(x, y) {
     return -1;
 }
 
-// ===== تبدیل مختصات ماوس به canvas =====
 function getCanvasCoords(e) {
     const rect = canvas.getBoundingClientRect();
     const x = (e.clientX - rect.left) * canvas.width / rect.width;
@@ -420,13 +433,11 @@ function getCanvasCoords(e) {
     return {x, y};
 }
 
-// ====== MOUSE DOWN ======
 canvas.addEventListener('mousedown', function(e) {
     const {x, y} = getCanvasCoords(e);
     STATE.mouseDown = true;
     STATE.mouseDownPos = {x, y};
 
-    // چک کن آیا روی خطی کلیک شده؟
     const lineIdx = findLineAt(x, y);
     if (lineIdx >= 0) {
         const line = STATE.lines[lineIdx];
@@ -438,11 +449,9 @@ canvas.addEventListener('mousedown', function(e) {
     }
 });
 
-// ====== MOUSE MOVE ======
 canvas.addEventListener('mousemove', function(e) {
     const {x, y} = getCanvasCoords(e);
 
-    // اگه در حال drag هستیم
     if (STATE.dragging) {
         const line = STATE.lines[STATE.dragging.lineIndex];
         if (line.type === 'vertical') {
@@ -456,7 +465,6 @@ canvas.addEventListener('mousemove', function(e) {
         return;
     }
 
-    // فقط تغییر cursor
     if (STATE.mouseDown) return;
     const lineIdx = findLineAt(x, y);
     if (lineIdx >= 0) {
@@ -467,12 +475,10 @@ canvas.addEventListener('mousemove', function(e) {
     }
 });
 
-// ====== MOUSE UP ======
 canvas.addEventListener('mouseup', function(e) {
     const wasDragging = STATE.dragging !== null;
     STATE.mouseDown = false;
 
-    // اگه drag نبود و خطی هم زیر ماوس نبود، خط جدید رسم کن
     if (!wasDragging && STATE.lineStep >= 1 && STATE.lineStep <= 5) {
         const {x, y} = getCanvasCoords(e);
         const lineIdx = findLineAt(x, y);
@@ -486,13 +492,11 @@ canvas.addEventListener('mouseup', function(e) {
     canvas.style.cursor = STATE.lineStep <= 5 ? 'crosshair' : 'default';
 });
 
-// ====== MOUSE LEAVE ======
 canvas.addEventListener('mouseleave', function() {
     STATE.dragging = null;
     STATE.mouseDown = false;
 });
 
-// ====== TOUCH (موبایل) ======
 canvas.addEventListener('touchstart', function(e) {
     if (e.touches.length !== 1) return;
     e.preventDefault();
@@ -544,9 +548,6 @@ canvas.addEventListener('touchend', function(e) {
     STATE.touchPending = null;
 }, {passive: false});
 
-// ============================================================
-//   رسم خط جدید
-// ============================================================
 function handleLineClick(x, y) {
     const step = STATE.lineStep;
     if (step < 1 || step > 5) return;
@@ -574,9 +575,6 @@ function handleLineClick(x, y) {
     }
 }
 
-// ============================================================
-//   بازترسیم کامل canvas
-// ============================================================
 function redrawCanvas() {
     const ctx = canvas.getContext('2d');
     ctx.drawImage(STATE.imageAdjusted, 0, 0);
@@ -585,7 +583,6 @@ function redrawCanvas() {
 
 function drawLine(line) {
     const ctx = canvas.getContext('2d');
-    // هاله پشت خط برای دیده شدن بهتر
     ctx.strokeStyle = 'rgba(0,0,0,0.5)';
     ctx.lineWidth = 5;
     ctx.setLineDash([8, 4]);
@@ -599,7 +596,6 @@ function drawLine(line) {
     }
     ctx.stroke();
 
-    // خط اصلی
     ctx.strokeStyle = line.color;
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -613,7 +609,6 @@ function drawLine(line) {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // برچسب
     ctx.fillStyle = line.color;
     ctx.font = 'bold 16px Arial';
     if (line.type === 'vertical') {
@@ -646,6 +641,7 @@ function undoLastLine() {
 function resetLines() {
     STATE.lineStep = 1;
     STATE.lines = []; STATE.allLines = [];
+    currentProfileIdx = 0;
     redrawCanvas();
     document.getElementById('stepInfo').textContent = LINE_STEPS_TEXT[1];
     document.getElementById('valuesCard').style.display = 'none';
@@ -666,7 +662,9 @@ async function runExtraction() {
         return;
     }
 
-    document.getElementById('status3').textContent = '⏳ در حال استخراج...';
+    const profile = VITERBI_PROFILES[currentProfileIdx];
+    document.getElementById('status3').textContent =
+        `⏳ در حال استخراج (پروفایل: ${profile.name})...`;
     document.getElementById('extractBtn').disabled = true;
     try {
         const vLines = STATE.lines.filter(l => l.type === 'vertical').sort((a,b) => a.x - b.x);
@@ -683,7 +681,10 @@ async function runExtraction() {
             d_mid: parseFloat(document.getElementById('d_mid').value),
             y_bot: hLines[2].y,
             d_bot: parseFloat(document.getElementById('d_bot').value),
-            db_step: parseFloat(document.getElementById('dbStep').value)
+            db_step: parseFloat(document.getElementById('dbStep').value),
+            LAMBDA_SMOOTH: profile.LAMBDA_SMOOTH,
+            SIGMA_OBS: profile.SIGMA_OBS,
+            MAX_JUMP_RATIO: profile.MAX_JUMP_RATIO
         };
 
         const corners = [
@@ -707,12 +708,20 @@ async function runExtraction() {
 
         STATE.result = result;
         showResult(result);
-        document.getElementById('status3').textContent = `✅ ${result.frequency.length} نقطه`;
+        document.getElementById('status3').textContent =
+            `✅ ${result.frequency.length} نقطه (پروفایل: ${profile.name})`;
     } catch (err) {
         console.error(err);
         document.getElementById('status3').textContent = '❌ ' + (err.message || err);
     }
     document.getElementById('extractBtn').disabled = false;
+}
+
+async function retryExtraction() {
+    currentProfileIdx = (currentProfileIdx + 1) % VITERBI_PROFILES.length;
+    const profile = VITERBI_PROFILES[currentProfileIdx];
+    console.log(`🔄 تلاش مجدد با پروفایل: ${profile.name}`);
+    await runExtraction();
 }
 
 function imageToArray(imgOrCanvas) {

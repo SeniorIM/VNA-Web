@@ -1,6 +1,7 @@
 """
 استخراج دقیق منحنی S11 از عکس VNA
 نسخه پیشرفته با الگوریتم Viterbi (Dynamic Programming)
+با پارامترهای قابل تنظیم از UI
 """
 from js import window
 import json
@@ -94,7 +95,6 @@ def perspective_rectify_pil(pil_img, corners):
     xs_f = src_coords[0, :].reshape(out_h, out_w)
     ys_f = src_coords[1, :].reshape(out_h, out_w)
 
-    # درون‌یابی دوخطی
     arr = np.array(pil_img).astype(np.float32)
     h_img, w_img = arr.shape[:2]
     xs_f = np.clip(xs_f, 0, w_img - 1.001)
@@ -166,37 +166,25 @@ def remove_small_components_np(mask, min_width_ratio=0.02):
 
 
 # ============================================================
-#          الگوریتم Viterbi برای Tracking
+#          الگوریتم Viterbi
 # ============================================================
 
-def viterbi_track(cleaned, start_y, smooth_window=5):
+def viterbi_track(cleaned, start_y,
+                  LAMBDA_SMOOTH=0.8, SIGMA_OBS=3.0, MAX_JUMP_RATIO=0.15):
     """
     ردیابی منحنی با الگوریتم Viterbi (Dynamic Programming)
-    
-    ایده اصلی:
-    - برای هر ستون x، مجموعه‌ای از "نقاط کاندید" (گروه‌های پیکسلی) داریم
-    - به هر کاندید یه "هزینه" اختصاص می‌دیم:
-      • هزینه‌ی مشاهده (observation cost): چقدر شبیه منحنی هست
-      • هزینه‌ی انتقال (transition cost): از کاندید قبلی چقدر فاصله داره
-    - مسیری رو پیدا می‌کنیم که مجموع هزینه‌هاش کمترین باشه
-    
-    پارامترها:
-    - lambda_smooth: وزن هموارسازی (بزرگ‌تر = مسیر صاف‌تر)
-    - max_jump: حداکثر پرش مجاز بین دو ستون متوالی
+    پارامترها از UI قابل تنظیم هستن
     """
     h, w = cleaned.shape
     ys = np.full(w, np.nan, dtype=float)
-    nll = np.full(w, np.nan, dtype=float)  # negative log-likelihood
-    
-    # ===== مرحله ۱: پیدا کردن همه کاندیدها در هر ستون =====
-    candidates = []  # لیستی از آرایه‌ها، هر آرایه = کاندیدهای ستون x
+
+    # ===== کاندیدها =====
+    candidates = []
     for x in range(w):
         rows = np.flatnonzero(cleaned[:, x])
         if len(rows) == 0:
             candidates.append(np.array([], dtype=float))
             continue
-        
-        # گروه‌بندی
         groups = []
         current = [int(rows[0])]
         for r in rows[1:]:
@@ -207,12 +195,9 @@ def viterbi_track(cleaned, start_y, smooth_window=5):
                 groups.append(current)
                 current = [r]
         groups.append(current)
-        
-        # مرکز هر گروه
         centers = np.array([np.mean(g) for g in groups], dtype=float)
         candidates.append(centers)
-    
-    # ===== مرحله ۲: پیدا کردن ستون شروع =====
+
     start_col = None
     for x in range(w):
         if len(candidates[x]) > 0:
@@ -220,182 +205,139 @@ def viterbi_track(cleaned, start_y, smooth_window=5):
             break
     if start_col is None:
         return ys
-    
-    # ===== مرحله ۳: Viterbi forward pass =====
-    # cost[x][i] = کمترین هزینه برای رسیدن به کاندید i در ستون x
-    # prev[x][i] = ایندکس کاندید قبلی که به i منتهی شده
-    
-    # پارامترها (قابل تنظیم)
-    LAMBDA_SMOOTH = 0.8       # وزن هموارسازی
-    MAX_JUMP = h * 0.15       # حداکثر پرش (۱۵٪ ارتفاع)
-    SIGMA_OBS = 3.0           # انحراف معیار مشاهده
-    
+
+    MAX_JUMP = h * MAX_JUMP_RATIO
+
     costs = {}
     prevs = {}
-    
-    # مقدار اولیه برای ستون شروع
+
     init_costs = np.zeros(len(candidates[start_col]))
     costs[start_col] = init_costs
     prevs[start_col] = np.full(len(candidates[start_col]), -1, dtype=int)
-    
-    # از ستون شروع به راست
+
+    # ===== Forward: چپ به راست =====
     for x in range(start_col + 1, w):
         if len(candidates[x]) == 0:
             continue
-        
-        # آخرین ستون با کاندید
         prev_x = None
         for px in range(x - 1, -1, -1):
             if len(candidates[px]) > 0 and px in costs:
                 prev_x = px
                 break
-        
         if prev_x is None:
-            # هیچ ستون قبلی نیست
             costs[x] = np.zeros(len(candidates[x]))
             prevs[x] = np.full(len(candidates[x]), -1, dtype=int)
             continue
-        
+
         prev_costs = costs[prev_x]
         prev_cands = candidates[prev_x]
         curr_cands = candidates[x]
-        
-        # محاسبه هزینه‌ها
+
         curr_costs = np.full(len(curr_cands), np.inf)
         curr_prevs = np.full(len(curr_cands), -1, dtype=int)
-        
-        gap = x - prev_x  # فاصله ستون‌ها (برای شکاف)
-        
+
+        gap = x - prev_x
+
         for i, cy in enumerate(curr_cands):
-            # observation cost: چقدر این کاندید "منحنی" هست
-            # (نزدیک‌تر به مرکز تصویر بهتر، ولی اینجا همه کاندیدها قابل قبولن)
-            obs_cost = 0.0
-            
             best_cost = np.inf
             best_prev = -1
-            
             for j, py in enumerate(prev_cands):
-                # transition cost: فاصله افقی + عمودی
                 dy = abs(cy - py)
-                dx = gap
-                
-                # اگه پرش بیشتر از حد مجاز باشه، جریمه سنگین
-                if dy > MAX_JUMP * dx:
+                if dy > MAX_JUMP * gap:
                     continue
-                
-                # transition = dy² + جریمه پرش بزرگ
                 trans_cost = (dy ** 2) / (2 * SIGMA_OBS ** 2)
-                # جریمه اضافی برای پرش‌های بزرگ (غیرخطی)
                 if dy > SIGMA_OBS * 2:
                     trans_cost += (dy - SIGMA_OBS * 2) * LAMBDA_SMOOTH
-                
-                total = prev_costs[j] + trans_cost + obs_cost
+                total = prev_costs[j] + trans_cost
                 if total < best_cost:
                     best_cost = total
                     best_prev = j
-            
             curr_costs[i] = best_cost
             curr_prevs[i] = best_prev
-        
+
         costs[x] = curr_costs
         prevs[x] = curr_prevs
-    
-    # ===== مرحله ۴: از ستون شروع به چپ =====
+
+    # ===== Forward: راست به چپ =====
     for x in range(start_col - 1, -1, -1):
         if len(candidates[x]) == 0:
             continue
-        
         next_x = None
         for nx in range(x + 1, w):
             if len(candidates[nx]) > 0 and nx in costs:
                 next_x = nx
                 break
-        
         if next_x is None:
             costs[x] = np.zeros(len(candidates[x]))
             prevs[x] = np.full(len(candidates[x]), -1, dtype=int)
             continue
-        
+
         next_costs = costs[next_x]
         next_cands = candidates[next_x]
         curr_cands = candidates[x]
-        
+
         curr_costs = np.full(len(curr_cands), np.inf)
         curr_prevs = np.full(len(curr_cands), -1, dtype=int)
-        
+
         gap = next_x - x
-        
+
         for i, cy in enumerate(curr_cands):
             best_cost = np.inf
             best_prev = -1
-            
             for j, ny in enumerate(next_cands):
                 dy = abs(cy - ny)
                 if dy > MAX_JUMP * gap:
                     continue
-                
                 trans_cost = (dy ** 2) / (2 * SIGMA_OBS ** 2)
                 if dy > SIGMA_OBS * 2:
                     trans_cost += (dy - SIGMA_OBS * 2) * LAMBDA_SMOOTH
-                
                 total = next_costs[j] + trans_cost
                 if total < best_cost:
                     best_cost = total
                     best_prev = j
-            
             curr_costs[i] = best_cost
             curr_prevs[i] = best_prev
-        
+
         costs[x] = curr_costs
         prevs[x] = curr_prevs
-    
-    # ===== مرحله ۵: Backtracking (از راست به چپ) =====
-    # از آخرین ستون با کاندید شروع می‌کنیم
+
+    # ===== Backtracking =====
     end_x = None
     for x in range(w - 1, -1, -1):
         if x in costs and len(candidates[x]) > 0 and np.any(np.isfinite(costs[x])):
             end_x = x
             break
-    
     if end_x is None:
         return ys
-    
-    # انتخاب بهترین کاندید در ستون پایان
+
     best_idx = int(np.argmin(costs[end_x]))
     ys[end_x] = candidates[end_x][best_idx]
-    
-    # backtrack به چپ
+
     x = end_x
     while x > 0:
         idx = best_idx
-        # پیدا کردن ستون قبلی که هزینه داره
         prev_x = None
         for px in range(x - 1, -1, -1):
             if px in costs:
                 prev_x = px
                 break
-        
         if prev_x is None:
             break
-        
         prev_idx = prevs[x][idx]
         if prev_idx < 0:
             break
-        
         ys[prev_x] = candidates[prev_x][prev_idx]
         x = prev_x
         best_idx = prev_idx
-    
-    # ===== مرحله ۶: پر کردن شکاف‌های بزرگ =====
-    # اگه بین دو نقطه‌ی موجود فاصله زیاد باشه، NaN بذار
+
+    # پر کردن شکاف‌های بزرگ
     valid_indices = np.where(np.isfinite(ys))[0]
     if len(valid_indices) >= 2:
-        # فقط شکاف‌های بزرگ‌تر از ۳٪ عرض رو NaN کن
         max_gap = int(w * 0.05)
         for i in range(len(valid_indices) - 1):
             if valid_indices[i+1] - valid_indices[i] > max_gap:
                 ys[valid_indices[i]+1:valid_indices[i+1]] = np.nan
-    
+
     return ys
 
 
@@ -418,14 +360,13 @@ def smooth_subpixel(ys, window=5):
     return out
 
 
-def extract_trace(mask):
+def extract_trace(mask, LAMBDA_SMOOTH=0.8, SIGMA_OBS=3.0, MAX_JUMP_RATIO=0.15):
     """استخراج مسیر با Viterbi"""
     h, w = mask.shape
     cleaned = remove_small_components_np(mask, min_width_ratio=0.02)
     if cleaned.sum() < 30:
         raise RuntimeError("منحنی پیدا نشد.")
 
-    # نقطه شروع = میانه y همه پیکسل‌های زرد
     ys_all = []
     for x in range(w):
         rows = np.flatnonzero(cleaned[:, x])
@@ -434,8 +375,12 @@ def extract_trace(mask):
         raise RuntimeError("پیکسل زرد کافی پیدا نشد.")
     start_y = int(np.median(ys_all))
 
-    # ===== Viterbi Tracking =====
-    ys_full = viterbi_track(cleaned, start_y)
+    ys_full = viterbi_track(
+        cleaned, start_y,
+        LAMBDA_SMOOTH=LAMBDA_SMOOTH,
+        SIGMA_OBS=SIGMA_OBS,
+        MAX_JUMP_RATIO=MAX_JUMP_RATIO
+    )
     valid_count = np.isfinite(ys_full).sum()
     if valid_count < max(10, int(w * 0.3)):
         raise RuntimeError(f"Viterbi ناموفق: {valid_count} نقطه.")
@@ -445,7 +390,6 @@ def extract_trace(mask):
     x_raw = xs_arr[valid_raw]
     y_raw = ys_full[valid_raw]
 
-    # هموارسازی
     ys = smooth_subpixel(ys_full, window=5)
 
     valid = np.isfinite(ys)
@@ -479,7 +423,18 @@ def process_image(img_array, corners_list, calib_dict):
         mask = detect_yellow_trace_np(rectified_rgb)
         print(f">>> mask: {np.count_nonzero(mask)} pixels")
 
-        x_clean, y_clean, x_raw, y_raw = extract_trace(mask)
+        # ===== پارامترهای Viterbi =====
+        lambda_smooth = float(calib.get('LAMBDA_SMOOTH', 0.8))
+        sigma_obs = float(calib.get('SIGMA_OBS', 3.0))
+        max_jump_ratio = float(calib.get('MAX_JUMP_RATIO', 0.15))
+        print(f">>> پروفایل Viterbi: λ={lambda_smooth}, σ={sigma_obs}, jump={max_jump_ratio}")
+
+        x_clean, y_clean, x_raw, y_raw = extract_trace(
+            mask,
+            LAMBDA_SMOOTH=lambda_smooth,
+            SIGMA_OBS=sigma_obs,
+            MAX_JUMP_RATIO=max_jump_ratio
+        )
         print(f">>> Viterbi استخراج: {len(x_clean)} نقطه")
 
         # کالیبراسیون X
