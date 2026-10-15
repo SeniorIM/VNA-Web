@@ -1,6 +1,6 @@
 """
 استخراج دقیق منحنی S11 از عکس VNA
-نسخه پایدار با Nearest Neighbor Tracking و کالیبراسیون ۳ نقطه‌ای Y
+نسخه پایدار با Nearest Neighbor + کالیبراسیون ۳ نقطه‌ای Y
 """
 from js import window
 import json
@@ -20,9 +20,6 @@ def _mark(name, state):
 _mark("pyodide", "ok")
 
 
-# ============================================================
-#          Import کتابخانه‌ها
-# ============================================================
 try:
     _mark("numpy", "loading")
     import numpy as np
@@ -105,6 +102,9 @@ def perspective_rectify_pil(pil_img, corners):
 
 
 def detect_yellow_trace_np(rgb_arr):
+    """
+    تشخیص زرد - با شرط ساده (بدون پیچیدگی اضافه)
+    """
     r = rgb_arr[:, :, 0].astype(np.int16)
     g = rgb_arr[:, :, 1].astype(np.int16)
     b = rgb_arr[:, :, 2].astype(np.int16)
@@ -171,6 +171,10 @@ def split_groups(rows, gap=3):
 
 
 def track_nearest_np(cleaned, start_y):
+    """
+    ردیابی ساده Nearest Neighbor
+    هیچ وزن‌دهی یا پیچیدگی اضافه نداره
+    """
     h, w = cleaned.shape
     ys = np.full(w, np.nan, dtype=float)
     start_col = None
@@ -180,6 +184,7 @@ def track_nearest_np(cleaned, start_y):
             break
     if start_col is None:
         return ys
+
     rows = np.flatnonzero(cleaned[:, start_col])
     if len(rows) == 0:
         return ys
@@ -188,6 +193,7 @@ def track_nearest_np(cleaned, start_y):
     ys[start_col] = np.mean(closest)
     prev_y = ys[start_col]
 
+    # رفتن به راست
     for x in range(start_col + 1, w):
         rows = np.flatnonzero(cleaned[:, x])
         if len(rows) == 0:
@@ -197,6 +203,7 @@ def track_nearest_np(cleaned, start_y):
         ys[x] = np.mean(closest)
         prev_y = ys[x]
 
+    # رفتن به چپ
     prev_y = ys[start_col]
     for x in range(start_col - 1, -1, -1):
         rows = np.flatnonzero(cleaned[:, x])
@@ -240,6 +247,9 @@ def fill_short_gaps(ys, max_gap_ratio=0.03):
 
 
 def remove_isolated_spikes(ys, h, max_jump_ratio=0.20):
+    """
+    حذف اسپایک‌ها - آستانه 0.20 (متوسط)
+    """
     ys = ys.copy()
     w = len(ys)
     threshold = h * max_jump_ratio
