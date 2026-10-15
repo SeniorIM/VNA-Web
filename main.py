@@ -1,7 +1,6 @@
 """
 استخراج دقیق منحنی S11 از عکس VNA
-نسخه پیشرفته با الگوریتم Viterbi (Dynamic Programming)
-با پارامترهای قابل تنظیم از UI
+نسخه پایدار با Nearest Neighbor Tracking
 """
 from js import window
 import json
@@ -166,178 +165,138 @@ def remove_small_components_np(mask, min_width_ratio=0.02):
 
 
 # ============================================================
-#          الگوریتم Viterbi
+#          Nearest Neighbor Tracking
 # ============================================================
 
-def viterbi_track(cleaned, start_y,
-                  LAMBDA_SMOOTH=0.8, SIGMA_OBS=3.0, MAX_JUMP_RATIO=0.15):
-    """
-    ردیابی منحنی با الگوریتم Viterbi (Dynamic Programming)
-    پارامترها از UI قابل تنظیم هستن
-    """
+def find_curve_center_y_np(cleaned):
     h, w = cleaned.shape
-    ys = np.full(w, np.nan, dtype=float)
-
-    # ===== کاندیدها =====
-    candidates = []
+    ys = []
     for x in range(w):
         rows = np.flatnonzero(cleaned[:, x])
-        if len(rows) == 0:
-            candidates.append(np.array([], dtype=float))
-            continue
-        groups = []
-        current = [int(rows[0])]
-        for r in rows[1:]:
-            r = int(r)
-            if r - current[-1] <= 3:
-                current.append(r)
-            else:
-                groups.append(current)
-                current = [r]
-        groups.append(current)
-        centers = np.array([np.mean(g) for g in groups], dtype=float)
-        candidates.append(centers)
+        ys.extend(rows.tolist())
+    if len(ys) < 10:
+        return h // 2
+    return int(np.median(ys))
 
+
+def split_groups(rows, gap=3):
+    if len(rows) == 0:
+        return []
+    groups = []
+    current = [int(rows[0])]
+    for r in rows[1:]:
+        r = int(r)
+        if r - current[-1] <= gap:
+            current.append(r)
+        else:
+            groups.append(current)
+            current = [r]
+    groups.append(current)
+    return groups
+
+
+def track_nearest_np(cleaned, start_y):
+    """ردیابی منحنی با میانگین گروه نزدیک (Nearest Neighbor)"""
+    h, w = cleaned.shape
+    ys = np.full(w, np.nan, dtype=float)
     start_col = None
     for x in range(w):
-        if len(candidates[x]) > 0:
+        if cleaned[:, x].sum() > 0:
             start_col = x
             break
     if start_col is None:
         return ys
 
-    MAX_JUMP = h * MAX_JUMP_RATIO
-
-    costs = {}
-    prevs = {}
-
-    init_costs = np.zeros(len(candidates[start_col]))
-    costs[start_col] = init_costs
-    prevs[start_col] = np.full(len(candidates[start_col]), -1, dtype=int)
-
-    # ===== Forward: چپ به راست =====
-    for x in range(start_col + 1, w):
-        if len(candidates[x]) == 0:
-            continue
-        prev_x = None
-        for px in range(x - 1, -1, -1):
-            if len(candidates[px]) > 0 and px in costs:
-                prev_x = px
-                break
-        if prev_x is None:
-            costs[x] = np.zeros(len(candidates[x]))
-            prevs[x] = np.full(len(candidates[x]), -1, dtype=int)
-            continue
-
-        prev_costs = costs[prev_x]
-        prev_cands = candidates[prev_x]
-        curr_cands = candidates[x]
-
-        curr_costs = np.full(len(curr_cands), np.inf)
-        curr_prevs = np.full(len(curr_cands), -1, dtype=int)
-
-        gap = x - prev_x
-
-        for i, cy in enumerate(curr_cands):
-            best_cost = np.inf
-            best_prev = -1
-            for j, py in enumerate(prev_cands):
-                dy = abs(cy - py)
-                if dy > MAX_JUMP * gap:
-                    continue
-                trans_cost = (dy ** 2) / (2 * SIGMA_OBS ** 2)
-                if dy > SIGMA_OBS * 2:
-                    trans_cost += (dy - SIGMA_OBS * 2) * LAMBDA_SMOOTH
-                total = prev_costs[j] + trans_cost
-                if total < best_cost:
-                    best_cost = total
-                    best_prev = j
-            curr_costs[i] = best_cost
-            curr_prevs[i] = best_prev
-
-        costs[x] = curr_costs
-        prevs[x] = curr_prevs
-
-    # ===== Forward: راست به چپ =====
-    for x in range(start_col - 1, -1, -1):
-        if len(candidates[x]) == 0:
-            continue
-        next_x = None
-        for nx in range(x + 1, w):
-            if len(candidates[nx]) > 0 and nx in costs:
-                next_x = nx
-                break
-        if next_x is None:
-            costs[x] = np.zeros(len(candidates[x]))
-            prevs[x] = np.full(len(candidates[x]), -1, dtype=int)
-            continue
-
-        next_costs = costs[next_x]
-        next_cands = candidates[next_x]
-        curr_cands = candidates[x]
-
-        curr_costs = np.full(len(curr_cands), np.inf)
-        curr_prevs = np.full(len(curr_cands), -1, dtype=int)
-
-        gap = next_x - x
-
-        for i, cy in enumerate(curr_cands):
-            best_cost = np.inf
-            best_prev = -1
-            for j, ny in enumerate(next_cands):
-                dy = abs(cy - ny)
-                if dy > MAX_JUMP * gap:
-                    continue
-                trans_cost = (dy ** 2) / (2 * SIGMA_OBS ** 2)
-                if dy > SIGMA_OBS * 2:
-                    trans_cost += (dy - SIGMA_OBS * 2) * LAMBDA_SMOOTH
-                total = next_costs[j] + trans_cost
-                if total < best_cost:
-                    best_cost = total
-                    best_prev = j
-            curr_costs[i] = best_cost
-            curr_prevs[i] = best_prev
-
-        costs[x] = curr_costs
-        prevs[x] = curr_prevs
-
-    # ===== Backtracking =====
-    end_x = None
-    for x in range(w - 1, -1, -1):
-        if x in costs and len(candidates[x]) > 0 and np.any(np.isfinite(costs[x])):
-            end_x = x
-            break
-    if end_x is None:
+    rows = np.flatnonzero(cleaned[:, start_col])
+    if len(rows) == 0:
         return ys
+    groups = split_groups(rows)
+    closest = min(groups, key=lambda g: abs(np.mean(g) - start_y))
+    ys[start_col] = np.mean(closest)
+    prev_y = ys[start_col]
 
-    best_idx = int(np.argmin(costs[end_x]))
-    ys[end_x] = candidates[end_x][best_idx]
+    for x in range(start_col + 1, w):
+        rows = np.flatnonzero(cleaned[:, x])
+        if len(rows) == 0:
+            continue
+        groups = split_groups(rows)
+        closest = min(groups, key=lambda g: abs(np.mean(g) - prev_y))
+        ys[x] = np.mean(closest)
+        prev_y = ys[x]
 
-    x = end_x
-    while x > 0:
-        idx = best_idx
-        prev_x = None
-        for px in range(x - 1, -1, -1):
-            if px in costs:
-                prev_x = px
-                break
-        if prev_x is None:
-            break
-        prev_idx = prevs[x][idx]
-        if prev_idx < 0:
-            break
-        ys[prev_x] = candidates[prev_x][prev_idx]
-        x = prev_x
-        best_idx = prev_idx
+    prev_y = ys[start_col]
+    for x in range(start_col - 1, -1, -1):
+        rows = np.flatnonzero(cleaned[:, x])
+        if len(rows) == 0:
+            continue
+        groups = split_groups(rows)
+        closest = min(groups, key=lambda g: abs(np.mean(g) - prev_y))
+        ys[x] = np.mean(closest)
+        prev_y = ys[x]
 
-    # پر کردن شکاف‌های بزرگ
-    valid_indices = np.where(np.isfinite(ys))[0]
-    if len(valid_indices) >= 2:
-        max_gap = int(w * 0.05)
-        for i in range(len(valid_indices) - 1):
-            if valid_indices[i+1] - valid_indices[i] > max_gap:
-                ys[valid_indices[i]+1:valid_indices[i+1]] = np.nan
+    return ys
 
+
+def fill_short_gaps(ys, max_gap_ratio=0.03):
+    w = len(ys)
+    valid = np.isfinite(ys)
+    if valid.sum() < 10:
+        return ys
+    xs = np.arange(w)
+    ys_interp = np.interp(xs, xs[valid], ys[valid])
+    max_gap = int(w * max_gap_ratio)
+    invalid = ~valid
+    if invalid.sum() == 0:
+        return ys_interp
+    gap_groups = []
+    current = []
+    for i, inv in enumerate(invalid):
+        if inv:
+            current.append(i)
+        else:
+            if current:
+                gap_groups.append(current)
+                current = []
+    if current:
+        gap_groups.append(current)
+    result = ys_interp.copy()
+    for gap in gap_groups:
+        if len(gap) > max_gap:
+            result[gap[0]:gap[-1] + 1] = np.nan
+    return result
+
+
+def remove_isolated_spikes(ys, h, max_jump_ratio=0.20):
+    """حذف اسپایک‌های منفرد"""
+    ys = ys.copy()
+    w = len(ys)
+    threshold = h * max_jump_ratio
+    for i in range(2, w - 2):
+        if not np.isfinite(ys[i]):
+            continue
+        neighbors = []
+        for j in [i-2, i-1, i+1, i+2]:
+            if 0 <= j < w and np.isfinite(ys[j]):
+                neighbors.append(ys[j])
+        if len(neighbors) < 2:
+            continue
+        diffs = [abs(ys[i] - n) for n in neighbors]
+        if all(d > threshold for d in diffs):
+            neighbor_range = max(neighbors) - min(neighbors)
+            if neighbor_range < threshold:
+                left_j = None
+                for j in [i-2, i-1]:
+                    if 0 <= j < w and np.isfinite(ys[j]):
+                        left_j = j
+                        break
+                right_j = None
+                for j in [i+1, i+2]:
+                    if 0 <= j < w and np.isfinite(ys[j]):
+                        right_j = j
+                        break
+                if left_j is not None and right_j is not None:
+                    t = (i - left_j) / (right_j - left_j)
+                    ys[i] = ys[left_j] * (1 - t) + ys[right_j] * t
     return ys
 
 
@@ -360,37 +319,27 @@ def smooth_subpixel(ys, window=5):
     return out
 
 
-def extract_trace(mask, LAMBDA_SMOOTH=0.8, SIGMA_OBS=3.0, MAX_JUMP_RATIO=0.15):
-    """استخراج مسیر با Viterbi"""
+def extract_trace(mask, **kwargs):
+    """استخراج مسیر با Nearest Neighbor"""
     h, w = mask.shape
     cleaned = remove_small_components_np(mask, min_width_ratio=0.02)
     if cleaned.sum() < 30:
         raise RuntimeError("منحنی پیدا نشد.")
 
-    ys_all = []
-    for x in range(w):
-        rows = np.flatnonzero(cleaned[:, x])
-        ys_all.extend(rows.tolist())
-    if len(ys_all) < 10:
-        raise RuntimeError("پیکسل زرد کافی پیدا نشد.")
-    start_y = int(np.median(ys_all))
-
-    ys_full = viterbi_track(
-        cleaned, start_y,
-        LAMBDA_SMOOTH=LAMBDA_SMOOTH,
-        SIGMA_OBS=SIGMA_OBS,
-        MAX_JUMP_RATIO=MAX_JUMP_RATIO
-    )
-    valid_count = np.isfinite(ys_full).sum()
+    start_y = find_curve_center_y_np(cleaned)
+    ys_raw_full = track_nearest_np(cleaned, start_y)
+    valid_count = np.isfinite(ys_raw_full).sum()
     if valid_count < max(10, int(w * 0.3)):
-        raise RuntimeError(f"Viterbi ناموفق: {valid_count} نقطه.")
+        raise RuntimeError(f"ردیابی ناموفق: {valid_count} نقطه.")
 
     xs_arr = np.arange(w, dtype=float)
-    valid_raw = np.isfinite(ys_full)
+    valid_raw = np.isfinite(ys_raw_full)
     x_raw = xs_arr[valid_raw]
-    y_raw = ys_full[valid_raw]
+    y_raw = ys_raw_full[valid_raw]
 
-    ys = smooth_subpixel(ys_full, window=5)
+    ys = fill_short_gaps(ys_raw_full, max_gap_ratio=0.03)
+    ys = remove_isolated_spikes(ys, h, max_jump_ratio=0.20)
+    ys = smooth_subpixel(ys, window=5)
 
     valid = np.isfinite(ys)
     x_clean = xs_arr[valid]
@@ -403,7 +352,7 @@ def extract_trace(mask, LAMBDA_SMOOTH=0.8, SIGMA_OBS=3.0, MAX_JUMP_RATIO=0.15):
 # ============================================================
 
 def process_image(img_array, corners_list, calib_dict):
-    print(">>> process_image فراخوانی شد (Viterbi)")
+    print(">>> process_image فراخوانی شد (Nearest Neighbor)")
     try:
         calib = calib_dict.to_py() if hasattr(calib_dict, 'to_py') else calib_dict
         corners_js = corners_list.to_py() if hasattr(corners_list, 'to_py') else corners_list
@@ -423,19 +372,8 @@ def process_image(img_array, corners_list, calib_dict):
         mask = detect_yellow_trace_np(rectified_rgb)
         print(f">>> mask: {np.count_nonzero(mask)} pixels")
 
-        # ===== پارامترهای Viterbi =====
-        lambda_smooth = float(calib.get('LAMBDA_SMOOTH', 0.8))
-        sigma_obs = float(calib.get('SIGMA_OBS', 3.0))
-        max_jump_ratio = float(calib.get('MAX_JUMP_RATIO', 0.15))
-        print(f">>> پروفایل Viterbi: λ={lambda_smooth}, σ={sigma_obs}, jump={max_jump_ratio}")
-
-        x_clean, y_clean, x_raw, y_raw = extract_trace(
-            mask,
-            LAMBDA_SMOOTH=lambda_smooth,
-            SIGMA_OBS=sigma_obs,
-            MAX_JUMP_RATIO=max_jump_ratio
-        )
-        print(f">>> Viterbi استخراج: {len(x_clean)} نقطه")
+        x_clean, y_clean, x_raw, y_raw = extract_trace(mask)
+        print(f">>> استخراج: {len(x_clean)} نقطه")
 
         # کالیبراسیون X
         x1 = calib['x1']; f1 = calib['f1']
@@ -491,4 +429,4 @@ def process_image(img_array, corners_list, calib_dict):
 
 
 window.process_image = process_image
-print(">>> process_image به window وصل شد ✅ (Viterbi)")
+print(">>> process_image به window وصل شد ✅ (Nearest Neighbor)")
