@@ -30,7 +30,7 @@
             cursor: pointer; width: 100%; margin: 4px 0;
         }
         .btn:active { background: #1976d2; }
-        .btn:disabled { background: #555; }
+        .btn:disabled { background: #555; cursor: not-allowed; opacity: 0.6; }
         .btn-success { background: #4caf50; }
         .btn-warning { background: #ff9800; }
         .btn-danger { background: #f44336; }
@@ -118,19 +118,18 @@
 </head>
 <body>
 
-<!-- <h1>📊 VNA Curve Extractor</h1> -->
-<h1 style = "color: rgb(244, 137, 248)">سلام ملیکا من داداشتم ایمان این رو خودم درست کردم با کمک هوش مصنوعی</h1>
+<h1>📊 VNA Curve Extractor</h1>
 
-<div id="globalStatus" class="waiting">⏳ در حال آماده‌سازی...</div>
+<div id="globalStatus" class="waiting">⏳ در حال بارگذاری کتابخانه‌ها، لطفا صبر کنید...</div>
 
 <!-- ================= مرحله 1 ================= -->
 <div class="card">
     <h2>مرحله 1: انتخاب تصویر</h2>
-    <input type="file" id="fileInput" accept="image/*" style="display:none">
-    <button class="btn" onclick="document.getElementById('fileInput').click()">
+    <input type="file" id="fileInput" accept="image/*" style="display:none" disabled>
+    <button class="btn" id="selectImageBtn" onclick="document.getElementById('fileInput').click()" disabled>
         📷 انتخاب عکس
     </button>
-    <div class="status" id="status1">منتظر انتخاب تصویر...</div>
+    <div class="status" id="status1">⏳ منتظر بارگذاری کتابخانه‌ها...</div>
 
     <details open>
         <summary>⚙️ تنظیمات تصویر (Adjustment)</summary>
@@ -236,18 +235,39 @@ function setGlobalStatus(state, text) {
     g.textContent = text;
 }
 
-window.markLibLoading = (name) => console.log(`[lib] ${name} → loading`);
+function setUploadEnabled(enabled) {
+    const btn = document.getElementById('selectImageBtn');
+    const inp = document.getElementById('fileInput');
+    if (btn) btn.disabled = !enabled;
+    if (inp) inp.disabled = !enabled;
+}
+
+window.markLibLoading = (name) => {
+    console.log(`[lib] ${name} → loading`);
+    setGlobalStatus('waiting', `⏳ لطفاً صبر کنید... در حال بارگذاری ${name}`);
+};
+
 window.markLibOk = (name) => {
     console.log(`[lib] ${name} → OK`);
     libOkCount++;
     if (libOkCount >= LIB_TOTAL) {
-        setGlobalStatus('ready', '✅ کتابخانه‌ها با موفقیت وصل شدند');
+        setGlobalStatus('ready', '✅ کتابخانه‌ها با موفقیت بارگذاری شدند');
+        setUploadEnabled(true);
+        document.getElementById('status1').textContent = 'منتظر انتخاب تصویر...';
+    } else {
+        setGlobalStatus('waiting', `⏳ لطفاً صبر کنید... (${libOkCount}/${LIB_TOTAL})`);
     }
 };
+
 window.markLibError = (name) => {
     console.error(`[lib] ${name} → ERROR`);
     setGlobalStatus('error', `❌ خطا در بارگذاری ${name} (کنسول را ببینید)`);
+    setUploadEnabled(false);
+    document.getElementById('status1').textContent = '❌ خطا در بارگذاری کتابخانه‌ها';
 };
+
+// در ابتدا آپلود غیرفعال است
+setUploadEnabled(false);
 
 // ============================================================
 //   Adjustment تصویر
