@@ -133,8 +133,30 @@
         </label>
         <select id="curveType" style="width:100%; padding:12px; border-radius:6px; background:#1a1a1a; color:#fff; border:1px solid #555; font-size:15px;">
             <option value="magnitude" selected>دامنه (S11 / S21) - منحنی زرد یا سفید</option>
-            <option value="phase">فاز (Phase) - منحنی فیروزه‌ای (با پرش‌های ۳۶۰ درجه)</option>
+            <option value="phase">فاز (Phase) - پرش‌های ±۱۸۰ درجه</option>
         </select>
+        <div style="margin-top:10px;">
+            <label for="traceColor" style="font-size:14px; color:#aaa; display:block; margin-bottom:4px;">رنگ منحنی (اگر تشخیص خودکار اشتباه بود، رنگ را مشخص کن):</label>
+            <select id="traceColor" style="width:100%; padding:12px; border-radius:6px; background:#1a1a1a; color:#fff; border:1px solid #555; font-size:15px;">
+                <option value="auto" selected>تشخیص خودکار</option>
+                <option value="yellow">زرد</option>
+                <option value="cyan">فیروزه‌ای</option>
+                <option value="blue">آبی</option>
+                <option value="red">قرمز</option>
+                <option value="green">سبز</option>
+                <option value="magenta">بنفش / ارغوانی</option>
+                <option value="white">سفید</option>
+            </select>
+        </div>
+        <div id="phaseOutputWrap" style="display:none; margin-top:10px;">
+            <label for="phaseOutput" style="font-size:14px; color:#aaa; display:block; margin-bottom:4px;">خروجی فاز:</label>
+            <select id="phaseOutput" style="width:100%; padding:12px; border-radius:6px; background:#1a1a1a; color:#fff; border:1px solid #555; font-size:15px;">
+                <option value="wrapped">فاز پیچیده‌شده (مطابق تصویر)</option>
+                <option value="unwrapped">فاز بازشده (Unwrapped)</option>
+                <option value="both" selected>هر دو خروجی (نمودار پیچیده‌شده + هر دو ستون در Excel)</option>
+            </select>
+            <div class="helper-tip">Unwrapped با تشخیص تغییرهای عبوری از ±۱۸۰° محاسبه می‌شود؛ بررسی کن که مقیاس عمودی و خطوط راهنما درست کالیبره شده باشند.</div>
+        </div>
     </div>
 
     <input type="file" id="fileInput" accept="image/*" style="display:none" disabled>
@@ -154,6 +176,9 @@
             <div><label>Saturation</label><input type="number" id="adjSaturation" value="30" step="5"></div>
             <div><label>Sharpness</label><input type="number" id="adjSharpness" value="50" step="5"></div>
         </div>
+        <label style="display:flex; gap:8px; align-items:center; margin-top:10px; color:#ddd; font-size:13px;">
+            <input type="checkbox" id="keepOriginalResolution" style="width:auto;"> حفظ رزولوشن اصلی (دقیق‌تر، ولی پردازش کندتر)
+        </label>
         <button class="btn btn-warning" onclick="applyAdjustAndReload()" style="margin-top:8px; font-size:14px; padding:10px;">
             🔄 اعمال Adjustment روی تصویر
         </button>
@@ -287,6 +312,7 @@ setUploadEnabled(false);
 // ============================================================
 document.getElementById('curveType').addEventListener('change', function(e) {
     const type = e.target.value;
+    document.getElementById('phaseOutputWrap').style.display = type === 'phase' ? 'block' : 'none';
     if (type === 'phase') {
         document.getElementById('lbl_d_top').textContent = 'Y_top (deg) - بالا';
         document.getElementById('lbl_d_mid').textContent = 'Y_mid (deg) - وسط';
@@ -485,7 +511,8 @@ function applyAdjustAndReload(silent) {
     const MAX_WIDTH = 1200;
     let srcW = STATE.image.width, srcH = STATE.image.height;
     let dstW = srcW, dstH = srcH;
-    if (srcW > MAX_WIDTH) {
+    const keepOriginal = document.getElementById('keepOriginalResolution')?.checked;
+    if (!keepOriginal && srcW > MAX_WIDTH) {
         const ratio = MAX_WIDTH / srcW;
         dstW = MAX_WIDTH;
         dstH = Math.round(srcH * ratio);
@@ -946,7 +973,9 @@ async function runExtraction() {
             d_bot: parseFloat(document.getElementById('d_bot').value),
             db_step: parseFloat(document.getElementById('dbStep').value),
             extra_refs: extra_refs,
-            curve_type: curveType
+            curve_type: curveType,
+            trace_color: document.getElementById('traceColor').value,
+            phase_output: document.getElementById('phaseOutput').value
         };
 
         const corners = [
@@ -1000,7 +1029,7 @@ function imageToArray(imgOrCanvas) {
 
 function showResult(result) {
     document.getElementById('resultCard').style.display = 'block';
-    document.getElementById('status4').textContent = `${result.frequency.length} نقطه`;
+    document.getElementById('status4').textContent = `${result.frequency.length} نقطه` + (result.curve_type === 'phase' ? ' — فاز ' + (result.phase_output === 'unwrapped' ? 'Unwrapped' : result.phase_output === 'both' ? '(Wrapped + Unwrapped در Excel)' : 'Wrapped') : '');
     const c = document.getElementById('plotCanvas');
     const ctx = c.getContext('2d');
     const W = c.width, H = c.height, pad = 60;
@@ -1028,18 +1057,33 @@ function showResult(result) {
     ctx.strokeStyle = '#1976d2'; ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(px(xs[0]), py(ys[0]));
-    for (let i = 1; i < xs.length; i++) ctx.lineTo(px(xs[i]), py(ys[i]));
+    for (let i = 1; i < xs.length; i++) {
+        // در فاز پیچیده‌شده، خطی مورب از +180 به -180 رسم نکن.
+        const wrapBreak = result.curve_type === 'phase' && result.phase_output !== 'unwrapped' &&
+            Math.abs(ys[i] - ys[i - 1]) > 180;
+        if (wrapBreak) ctx.moveTo(px(xs[i]), py(ys[i]));
+        else ctx.lineTo(px(xs[i]), py(ys[i]));
+    }
     ctx.stroke();
 }
 
 function downloadExcel() {
     if (!STATE.result) return;
-    const xs = STATE.result.frequency;
-    const ys = STATE.result.amplitude;
-    const data = [['Frequency_GHz', 'Amplitude_dB']];
-    for (let i = 0; i < xs.length; i++) data.push([xs[i], ys[i]]);
+    const result = STATE.result;
+    const xs = result.frequency;
+    const ys = result.amplitude;
+    let data;
+    if (result.curve_type === 'phase') {
+        data = [['Frequency_GHz', 'Phase_Wrapped_deg', 'Phase_Unwrapped_deg', 'Selected_Output_deg']];
+        for (let i = 0; i < xs.length; i++) {
+            data.push([xs[i], result.phase_wrapped[i], result.phase_unwrapped[i], ys[i]]);
+        }
+    } else {
+        data = [['Frequency_GHz', 'Amplitude_dB']];
+        for (let i = 0; i < xs.length; i++) data.push([xs[i], ys[i]]);
+    }
     const ws = XLSX.utils.aoa_to_sheet(data);
-    ws['!cols'] = [{ wch: 18 }, { wch: 18 }];
+    ws['!cols'] = data[0].map((h) => ({ wch: Math.max(18, String(h).length + 2) }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Curve');
     XLSX.writeFile(wb, 'vna_curve.xlsx');
