@@ -124,7 +124,19 @@
 
 <!-- ================= مرحله 1 ================= -->
 <div class="card">
-    <h2>مرحله 1: انتخاب تصویر</h2>
+    <h2>مرحله 1: انتخاب نوع منحنی و تصویر</h2>
+    
+    <!-- انتخاب نوع منحنی -->
+    <div style="margin-bottom: 12px;">
+        <label style="font-size:14px; color:#aaa; display:block; margin-bottom:4px;">
+            نوع منحنی مورد نظر را انتخاب کنید:
+        </label>
+        <select id="curveType" style="width:100%; padding:12px; border-radius:6px; background:#1a1a1a; color:#fff; border:1px solid #555; font-size:15px;">
+            <option value="magnitude" selected>دامنه (S11 / S21) - منحنی زرد یا سفید</option>
+            <option value="phase">فاز (Phase) - منحنی فیروزه‌ای (با پرش‌های ۳۶۰ درجه)</option>
+        </select>
+    </div>
+
     <input type="file" id="fileInput" accept="image/*" style="display:none" disabled>
     <button class="btn" id="selectImageBtn" onclick="document.getElementById('fileInput').click()" disabled>
         📷 انتخاب عکس
@@ -165,14 +177,16 @@
     <div class="inputs">
         <div><label>X1 (GHz) - خط عمودی چپ</label><input type="number" id="f1" value="8" step="any"></div>
         <div><label>X2 (GHz) - خط عمودی راست</label><input type="number" id="f2" value="12" step="any"></div>
-        <div><label>Y_top (dB) - خط افقی بالا</label><input type="number" id="d_top" value="0" step="any"></div>
-        <div><label>Y_mid (dB) - خط افقی وسط</label><input type="number" id="d_mid" value="-30" step="any"></div>
-        <div><label>Y_bot (dB) - خط افقی پایین</label><input type="number" id="d_bot" value="-50" step="any"></div>
+        
+        <!-- مقادیر Y به صورت داینامیک تغییر می‌کنند -->
+        <div><label id="lbl_d_top">Y_top (dB) - بالا</label><input type="number" id="d_top" value="0" step="any"></div>
+        <div><label id="lbl_d_mid">Y_mid (dB) - وسط</label><input type="number" id="d_mid" value="-30" step="any"></div>
+        <div><label id="lbl_d_bot">Y_bot (dB) - پایین</label><input type="number" id="d_bot" value="-50" step="any"></div>
     </div>
 
     <div style="margin-top:12px;">
         <label style="font-size:14px; color:#aaa; display:block; margin-bottom:4px;">
-            گام خطوط افقی محور عمودی (dB):
+            گام خطوط افقی محور عمودی:
         </label>
         <select id="dbStep" style="width:100%; padding:12px; border-radius:6px; background:#1a1a1a; color:#fff; border:1px solid #555; font-size:15px;">
             <option value="10" selected>10 dB</option>
@@ -266,8 +280,45 @@ window.markLibError = (name) => {
     document.getElementById('status1').textContent = '❌ خطا در بارگذاری کتابخانه‌ها';
 };
 
-// در ابتدا آپلود غیرفعال است
 setUploadEnabled(false);
+
+// ============================================================
+//   تغییر مقادیر پیش‌فرض بر اساس نوع منحنی
+// ============================================================
+document.getElementById('curveType').addEventListener('change', function(e) {
+    const type = e.target.value;
+    if (type === 'phase') {
+        document.getElementById('lbl_d_top').textContent = 'Y_top (deg) - بالا';
+        document.getElementById('lbl_d_mid').textContent = 'Y_mid (deg) - وسط';
+        document.getElementById('lbl_d_bot').textContent = 'Y_bot (deg) - پایین';
+        document.getElementById('d_top').value = 180;
+        document.getElementById('d_mid').value = 0;
+        document.getElementById('d_bot').value = -180;
+        
+        const stepSelect = document.getElementById('dbStep');
+        stepSelect.innerHTML = `
+            <option value="90" selected>90 درجه</option>
+            <option value="45">45 درجه</option>
+            <option value="180">180 درجه</option>
+        `;
+    } else {
+        document.getElementById('lbl_d_top').textContent = 'Y_top (dB) - بالا';
+        document.getElementById('lbl_d_mid').textContent = 'Y_mid (dB) - وسط';
+        document.getElementById('lbl_d_bot').textContent = 'Y_bot (dB) - پایین';
+        document.getElementById('d_top').value = 0;
+        document.getElementById('d_mid').value = -30;
+        document.getElementById('d_bot').value = -50;
+        
+        const stepSelect = document.getElementById('dbStep');
+        stepSelect.innerHTML = `
+            <option value="10" selected>10 dB</option>
+            <option value="20">20 dB</option>
+            <option value="30">30 dB</option>
+            <option value="5">5 dB</option>
+            <option value="1">1 dB</option>
+        `;
+    }
+});
 
 // ============================================================
 //   Adjustment تصویر
@@ -373,7 +424,7 @@ const STATE = {
     mouseDownPos: null,
     touchPending: null,
 
-    extraLines: [],       // [{x, freq}]
+    extraLines: [],
     addingExtra: false,
     extraCounter: 0,
 };
@@ -797,7 +848,6 @@ function startAddingExtraLine() {
     STATE.addingExtra = true;
     canvas.style.cursor = 'crosshair';
     updateExtraStatus();
-    // اسکرول به بالای صفحه تا کاربر canvas را ببیند
     document.getElementById('clickCard').scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
@@ -872,13 +922,13 @@ async function runExtraction() {
         return;
     }
 
+    const curveType = document.getElementById('curveType').value;
     document.getElementById('status3').textContent = '⏳ در حال استخراج...';
     document.getElementById('extractBtn').disabled = true;
     try {
         const vLines = STATE.lines.filter(l => l.type === 'vertical').sort((a,b) => a.x - b.x);
         const hLines = STATE.lines.filter(l => l.type === 'horizontal').sort((a,b) => a.y - b.y);
 
-        // نقاط مرجع X اضافی
         const extra_refs = STATE.extraLines
             .filter(l => l.freq !== null && !isNaN(l.freq))
             .map(l => ({ x: l.x, freq: l.freq }));
@@ -895,7 +945,8 @@ async function runExtraction() {
             y_bot: hLines[2].y,
             d_bot: parseFloat(document.getElementById('d_bot').value),
             db_step: parseFloat(document.getElementById('dbStep').value),
-            extra_refs: extra_refs
+            extra_refs: extra_refs,
+            curve_type: curveType
         };
 
         const corners = [
