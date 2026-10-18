@@ -1,12 +1,12 @@
 """
-استخراج دقیق منحنی S11 از عکس VNA
-نسخه 2.0 - کالیبراسیون پیشرفته X با Least Squares
+استخراج دقیق منحنی S11/S21 یا فاز از عکس VNA
+نسخه یکپارچه: پشتیبانی از منحنی‌های دامنه (زرد/سفید) و فاز (زرد/فیروزه‌ای/آبی)
+با اصلاح ردیابی در نقاط تیز و حذف خطوط گرید
 """
 from js import window
 import json
 
 print(">>> main.py شروع به اجرا کرد")
-
 
 def _mark(name, state):
     try:
@@ -16,9 +16,7 @@ def _mark(name, state):
     except Exception:
         pass
 
-
 _mark("pyodide", "ok")
-
 
 try:
     _mark("numpy", "loading")
@@ -101,13 +99,37 @@ def perspective_rectify_pil(pil_img, corners):
     return Image.fromarray(out_arr.astype(np.uint8), "RGB")
 
 
-def detect_yellow_trace_np(rgb_arr):
+def detect_trace_smart(rgb_arr, curve_type="magnitude"):
+    """
+    تشخیص هوشمند رنگ:
+    - همه منحنی‌ها بر اساس روشنایی از پس‌زمینه تیره جدا می‌شوند.
+    - برای دامنه: زرد یا سفید.
+    - برای فاز: زرد یا آبی/فیروزه‌ای.
+    """
     r = rgb_arr[:, :, 0].astype(np.int16)
     g = rgb_arr[:, :, 1].astype(np.int16)
     b = rgb_arr[:, :, 2].astype(np.int16)
-    mask = (r > 100) & (g > 80) & (b < 120) & \
-           (r > b + 30) & (g > b + 20) & \
-           (np.abs(r - g) < 80)
+
+    brightness = (r + g + b) / 3.0
+    is_bright = brightness > 120
+
+    # زرد (مشترک)
+    is_yellow = (r > 100) & (g > 80) & (b < 120) & (r > b + 30) & (g > b + 20) & (np.abs(r - g) < 80)
+    
+    # سفید (برای دامنه)
+    is_colorful = (np.abs(r - g) > 15) | (np.abs(g - b) > 15) | (np.abs(r - b) > 15)
+    is_white = is_bright & ~is_colorful
+
+    # آبی/فیروزه‌ای (برای فاز)
+    is_cyan = (g > 100) & (b > 100) & (r < 160) & (g > r + 20) & (b > r + 20)
+
+    if curve_type == "phase":
+        # برای فاز: زرد یا فیروزه‌ای
+        mask = is_yellow | is_cyan
+    else:
+        # برای دامنه: زرد یا سفید
+        mask = is_yellow | is_white
+        
     return mask.astype(np.uint8)
 
 
@@ -167,7 +189,12 @@ def split_groups(rows, gap=3):
     return groups
 
 
-def track_nearest_np(cleaned, start_y):
+def track_nearest_np(cleaned, start_y, curve_type="magnitude"):
+    """
+    ردیابی بهبودیافته:
+    - برای فاز: با تحمل پرش بالا.
+    - برای دامنه: ردیابی عادی.
+    """
     h, w = cleaned.shape
     ys = np.full(w, np.nan, dtype=float)
     start_col = None
@@ -186,24 +213,36 @@ def track_nearest_np(cleaned, start_y):
     ys[start_col] = np.mean(closest)
     prev_y = ys[start_col]
 
-    for x in range(start_col + 1, w):
+    def get_next_y(x, prev_y):
         rows = np.flatnonzero(cleaned[:, x])
         if len(rows) == 0:
-            continue
+            return np.nan
+        
         groups = split_groups(rows)
-        closest = min(groups, key=lambda g: abs(np.mean(g) - prev_y))
-        ys[x] = np.mean(closest)
-        prev_y = ys[x]
+        
+        if curve_type == "phase":
+            # برای فاز: اگر گروهی شامل prev_y بود، همان را بردار (برای پرش‌های عمودی)
+            for g in groups:
+                if min(g) <= prev_y <= max(g):
+                    return np.mean(g)
+            # در غیر این صورت نزدیک‌ترین
+            closest = min(groups, key=lambda g: abs(np.mean(g) - prev_y))
+            return np.mean(closest)
+        else:
+            # برای دامنه: نزدیک‌ترین
+            closest = min(groups, key=lambda g: abs(np.mean(g) - prev_y))
+            return np.mean(closest)
 
+    # حرکت به راست
+    for x in range(start_col + 1, w):
+        ys[x] = get_next_y(x, prev_y)
+        if not np.isnan(ys[x]): prev_y = ys[x]
+
+    # حرکت به چپ
     prev_y = ys[start_col]
     for x in range(start_col - 1, -1, -1):
-        rows = np.flatnonzero(cleaned[:, x])
-        if len(rows) == 0:
-            continue
-        groups = split_groups(rows)
-        closest = min(groups, key=lambda g: abs(np.mean(g) - prev_y))
-        ys[x] = np.mean(closest)
-        prev_y = ys[x]
+        ys[x] = get_next_y(x, prev_y)
+        if not np.isnan(ys[x]): prev_y = ys[x]
 
     return ys
 
@@ -288,14 +327,14 @@ def smooth_subpixel(ys, window=5):
     return out
 
 
-def extract_trace(mask):
+def extract_trace(mask, curve_type="magnitude"):
     h, w = mask.shape
     cleaned = remove_small_components_np(mask, min_width_ratio=0.02)
     if cleaned.sum() < 30:
         raise RuntimeError("منحنی پیدا نشد.")
 
     start_y = find_curve_center_y_np(cleaned)
-    ys_raw_full = track_nearest_np(cleaned, start_y)
+    ys_raw_full = track_nearest_np(cleaned, start_y, curve_type)
     valid_count = np.isfinite(ys_raw_full).sum()
     if valid_count < max(10, int(w * 0.3)):
         raise RuntimeError(f"ردیابی ناموفق: {valid_count} نقطه.")
@@ -305,9 +344,15 @@ def extract_trace(mask):
     x_raw = xs_arr[valid_raw]
     y_raw = ys_raw_full[valid_raw]
 
-    ys = fill_short_gaps(ys_raw_full, max_gap_ratio=0.03)
-    ys = remove_isolated_spikes(ys, h, max_jump_ratio=0.20)
-    ys = smooth_subpixel(ys, window=5)
+    # تنظیمات فیلتر بر اساس نوع منحنی
+    if curve_type == "phase":
+        ys = fill_short_gaps(ys_raw_full, max_gap_ratio=0.01)
+        ys = remove_isolated_spikes(ys, h, max_jump_ratio=0.95) # حفظ پرش‌های ۳۶۰ درجه
+        ys = smooth_subpixel(ys, window=3)
+    else:
+        ys = fill_short_gaps(ys_raw_full, max_gap_ratio=0.03)
+        ys = remove_isolated_spikes(ys, h, max_jump_ratio=0.20)
+        ys = smooth_subpixel(ys, window=5)
 
     valid = np.isfinite(ys)
     x_clean = xs_arr[valid]
@@ -320,46 +365,25 @@ def extract_trace(mask):
 # ============================================================
 
 def make_x_mapper(corners, rect_w):
-    """
-    چون rectify از چهار گوشه انجام شده، در راستای افقی نگاشت خطی است:
-        x_rect = (x_orig - x_tl) / (x_tr - x_tl) * (rect_w - 1)
-    """
     x_tl = float(corners[0][0])
     x_tr = float(corners[1][0])
     denom = x_tr - x_tl
-    if abs(denom) < 1e-6:
-        denom = 1.0
+    if abs(denom) < 1e-6: denom = 1.0
 
     def mapper(x_orig):
         return (float(x_orig) - x_tl) / denom * (rect_w - 1)
-
     return mapper
 
 
-# ============================================================
-#     کالیبراسیون X با Least Squares
-# ============================================================
-
 def calibrate_x(x1_r, f1, x2_r, f2, extra_refs_r):
-    """
-    ورودی‌ها همه در مختصات rectify هستند:
-        x1_r, x2_r   : مختصات x خطوط V1 و V2 در تصویر rectify
-        f1, f2       : فرکانس مرجع
-        extra_refs_r : لیست [(x_rect, freq)]
-
-    خروجی: (a, b, method, rmse)
-        freq = a * x_rect + b
-    """
     points = [(x1_r, f1), (x2_r, f2)]
     for (xr, fr) in extra_refs_r:
-        # جلوگیری از نقطه تکراری
         is_dup = False
         for (xr2, _) in points:
             if abs(xr - xr2) < 2.0:
                 is_dup = True
                 break
-        if not is_dup:
-            points.append((xr, fr))
+        if not is_dup: points.append((xr, fr))
 
     n = len(points)
     if n >= 3:
@@ -368,15 +392,11 @@ def calibrate_x(x1_r, f1, x2_r, f2, extra_refs_r):
         A = np.vstack([X, np.ones_like(X)]).T
         coef, *_ = np.linalg.lstsq(A, F, rcond=None)
         a, b = float(coef[0]), float(coef[1])
-        F_pred = a * X + b
-        rmse = float(np.sqrt(np.mean((F - F_pred) ** 2)))
-        method = f"least_squares({n}pts)"
-        return a, b, method, rmse
+        rmse = float(np.sqrt(np.mean((F - (a * X + b)) ** 2)))
+        return a, b, f"least_squares({n}pts)", rmse
     else:
-        # 2 نقطه
         denom = x2_r - x1_r
-        if abs(denom) < 1e-6:
-            denom = 1.0
+        if abs(denom) < 1e-6: denom = 1.0
         a = (f2 - f1) / denom
         b = f1 - a * x1_r
         return a, b, "two_point", 0.0
@@ -387,20 +407,17 @@ def calibrate_y(y_top_r, d_top, y_mid_r, d_mid, y_bot_r, d_bot):
     d_pts = np.array([d_top, d_mid, d_bot], dtype=np.float64)
     A_ls = np.vstack([y_pts, np.ones(3)]).T
     coef, *_ = np.linalg.lstsq(A_ls, d_pts, rcond=None)
-    a, b = float(coef[0]), float(coef[1])
-    return a, b
+    return float(coef[0]), float(coef[1])
 
 
 def make_y_mapper(corners, rect_h):
     tl_y = float(corners[0][1])
     bl_y = float(corners[3][1])
     denom = bl_y - tl_y
-    if abs(denom) < 1e-6:
-        denom = 1.0
+    if abs(denom) < 1e-6: denom = 1.0
 
     def mapper(y_orig):
         return (float(y_orig) - tl_y) / denom * (rect_h - 1)
-
     return mapper
 
 
@@ -411,7 +428,6 @@ def make_y_mapper(corners, rect_h):
 def process_image(img_array, corners_list, calib_dict):
     print(">>> process_image فراخوانی شد")
     try:
-        # تبدیل JS objects به Python
         calib = calib_dict.to_py() if hasattr(calib_dict, 'to_py') else calib_dict
         corners_js = corners_list.to_py() if hasattr(corners_list, 'to_py') else corners_list
 
@@ -429,13 +445,14 @@ def process_image(img_array, corners_list, calib_dict):
         print(f">>> rectify: {rect_w}x{rect_h}")
 
         rectified_rgb = np.array(rectified_pil)
-        mask = detect_yellow_trace_np(rectified_rgb)
-        print(f">>> mask: {int(np.count_nonzero(mask))} pixels")
+        
+        curve_type = calib.get('curve_type', 'magnitude')
+        mask = detect_trace_smart(rectified_rgb, curve_type)
+        print(f">>> mask ({curve_type}): {int(np.count_nonzero(mask))} pixels")
 
-        x_clean, y_clean, x_raw, y_raw = extract_trace(mask)
+        x_clean, y_clean, x_raw, y_raw = extract_trace(mask, curve_type)
         print(f">>> استخراج: {len(x_clean)} نقطه")
 
-        # ---------- کالیبراسیون X ----------
         x1_px = float(calib['x1']); f1 = float(calib['f1'])
         x2_px = float(calib['x2']); f2 = float(calib['f2'])
 
@@ -443,23 +460,15 @@ def process_image(img_array, corners_list, calib_dict):
         x1_r = map_x(x1_px)
         x2_r = map_x(x2_px)
 
-        # خطوط اضافی
         extra_raw = calib.get('extra_refs', [])
-        if hasattr(extra_raw, 'to_py'):
-            extra_raw = extra_raw.to_py()
+        if hasattr(extra_raw, 'to_py'): extra_raw = extra_raw.to_py()
         extra_refs_r = []
         for ref in extra_raw:
-            if hasattr(ref, 'to_py'):
-                ref = ref.to_py()
-            xr_orig = float(ref['x'])
-            fr = float(ref['freq'])
-            extra_refs_r.append((map_x(xr_orig), fr))
-        print(f">>> extra_refs: {len(extra_refs_r)}")
-
+            if hasattr(ref, 'to_py'): ref = ref.to_py()
+            extra_refs_r.append((map_x(float(ref['x'])), float(ref['freq'])))
+        
         a_x, b_x, calib_method, rmse = calibrate_x(x1_r, f1, x2_r, f2, extra_refs_r)
-        print(f">>> X calib [{calib_method}]: freq = {a_x:.6f}*x + {b_x:.4f} (RMSE={rmse:.4f})")
 
-        # ---------- کالیبراسیون Y ----------
         y_top = float(calib['y_top']); d_top = float(calib['d_top'])
         y_mid = float(calib['y_mid']); d_mid = float(calib['d_mid'])
         y_bot = float(calib['y_bot']); d_bot = float(calib['d_bot'])
@@ -470,24 +479,18 @@ def process_image(img_array, corners_list, calib_dict):
         y_bot_r = map_y(y_bot)
 
         a_y, b_y = calibrate_y(y_top_r, d_top, y_mid_r, d_mid, y_bot_r, d_bot)
-        print(f">>> Y calib: d = {a_y:.4f}*y + {b_y:.4f}")
 
-        # ---------- محاسبه نهایی ----------
         frequency = a_x * x_clean + b_x
         amplitude_db = a_y * y_clean + b_y
 
-        # مرتب‌سازی بر اساس فرکانس
         order = np.argsort(frequency)
         frequency = frequency[order]
         amplitude_db = amplitude_db[order]
 
-        # محدود به بازه X1..X2
         lo, hi = sorted((f1, f2))
         valid = (frequency >= lo) & (frequency <= hi)
         frequency = frequency[valid]
         amplitude_db = amplitude_db[valid]
-
-        print(f">>> نتیجه: {len(frequency)} نقطه [{calib_method}]")
 
         result_json = json.dumps({
             'frequency': frequency.tolist(),
