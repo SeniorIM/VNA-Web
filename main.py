@@ -1,7 +1,6 @@
 """
 استخراج دقیق منحنی S11/S21 یا فاز از عکس VNA
-نسخه یکپارچه: پشتیبانی از منحنی‌های دامنه (زرد/سفید) و فاز (زرد/فیروزه‌ای/آبی)
-با اصلاح ردیابی در نقاط تیز و حذف خطوط گرید
+نسخه یکپارچه با انتخاب رنگ و پشتیبانی از Wrapped/Unwrapped
 """
 from js import window
 import json
@@ -99,37 +98,30 @@ def perspective_rectify_pil(pil_img, corners):
     return Image.fromarray(out_arr.astype(np.uint8), "RGB")
 
 
-def detect_trace_smart(rgb_arr, curve_type="magnitude"):
+def get_trace_mask(rgb_arr, curve_color):
     """
-    تشخیص هوشمند رنگ:
-    - همه منحنی‌ها بر اساس روشنایی از پس‌زمینه تیره جدا می‌شوند.
-    - برای دامنه: زرد یا سفید.
-    - برای فاز: زرد یا آبی/فیروزه‌ای.
+    تشخیص منحنی بر اساس رنگی که کاربر انتخاب کرده است.
     """
     r = rgb_arr[:, :, 0].astype(np.int16)
     g = rgb_arr[:, :, 1].astype(np.int16)
     b = rgb_arr[:, :, 2].astype(np.int16)
 
     brightness = (r + g + b) / 3.0
-    is_bright = brightness > 120
 
-    # زرد (مشترک)
-    is_yellow = (r > 100) & (g > 80) & (b < 120) & (r > b + 30) & (g > b + 20) & (np.abs(r - g) < 80)
-    
-    # سفید (برای دامنه)
-    is_colorful = (np.abs(r - g) > 15) | (np.abs(g - b) > 15) | (np.abs(r - b) > 15)
-    is_white = is_bright & ~is_colorful
-
-    # آبی/فیروزه‌ای (برای فاز)
-    is_cyan = (g > 100) & (b > 100) & (r < 160) & (g > r + 20) & (b > r + 20)
-
-    if curve_type == "phase":
-        # برای فاز: زرد یا فیروزه‌ای
-        mask = is_yellow | is_cyan
+    if curve_color == "yellow":
+        mask = (r > 100) & (g > 80) & (b < 120) & \
+               (r > b + 30) & (g > b + 20) & \
+               (np.abs(r - g) < 80)
+    elif curve_color == "white":
+        is_colorful = (np.abs(r - g) > 15) | (np.abs(g - b) > 15) | (np.abs(r - b) > 15)
+        mask = (brightness > 150) & ~is_colorful
+    elif curve_color == "cyan":
+        mask = (g > 100) & (b > 100) & (r < 160) & \
+               (g > r + 20) & (b > r + 20)
     else:
-        # برای دامنه: زرد یا سفید
-        mask = is_yellow | is_white
-        
+        # fallback
+        mask = (r > 100) & (g > 80) & (b < 120)
+
     return mask.astype(np.uint8)
 
 
@@ -191,9 +183,7 @@ def split_groups(rows, gap=3):
 
 def track_nearest_np(cleaned, start_y, curve_type="magnitude"):
     """
-    ردیابی بهبودیافته:
-    - برای فاز: با تحمل پرش بالا.
-    - برای دامنه: ردیابی عادی.
+    ردیابی با پشتیبانی از پرش‌های عمودی در فاز.
     """
     h, w = cleaned.shape
     ys = np.full(w, np.nan, dtype=float)
@@ -221,7 +211,7 @@ def track_nearest_np(cleaned, start_y, curve_type="magnitude"):
         groups = split_groups(rows)
         
         if curve_type == "phase":
-            # برای فاز: اگر گروهی شامل prev_y بود، همان را بردار (برای پرش‌های عمودی)
+            # برای فاز: اگر گروهی شامل prev_y بود، همان را بردار (برای پرش‌ها)
             for g in groups:
                 if min(g) <= prev_y <= max(g):
                     return np.mean(g)
@@ -344,10 +334,9 @@ def extract_trace(mask, curve_type="magnitude"):
     x_raw = xs_arr[valid_raw]
     y_raw = ys_raw_full[valid_raw]
 
-    # تنظیمات فیلتر بر اساس نوع منحنی
     if curve_type == "phase":
         ys = fill_short_gaps(ys_raw_full, max_gap_ratio=0.01)
-        ys = remove_isolated_spikes(ys, h, max_jump_ratio=0.95) # حفظ پرش‌های ۳۶۰ درجه
+        ys = remove_isolated_spikes(ys, h, max_jump_ratio=0.95)
         ys = smooth_subpixel(ys, window=3)
     else:
         ys = fill_short_gaps(ys_raw_full, max_gap_ratio=0.03)
@@ -358,6 +347,23 @@ def extract_trace(mask, curve_type="magnitude"):
     x_clean = xs_arr[valid]
     y_clean = ys[valid]
     return x_clean, y_clean, x_raw, y_raw
+
+
+def unwrap_phase(amplitude_db):
+    """
+    تبدیل فاز Wrapped به Unwrapped.
+    هر جا پرش بیش از ۱۸۰ درجه رخ دهد، آن را جبران می‌کند.
+    """
+    unwrapped = np.copy(amplitude_db)
+    offset = 0
+    for i in range(1, len(unwrapped)):
+        diff = unwrapped[i] - unwrapped[i-1]
+        if diff > 180:
+            offset -= 360
+        elif diff < -180:
+            offset += 360
+        unwrapped[i] += offset
+    return unwrapped
 
 
 # ============================================================
@@ -433,7 +439,6 @@ def process_image(img_array, corners_list, calib_dict):
 
         h = int(window.imageHeight)
         w = int(window.imageWidth)
-        print(f">>> ابعاد: {w}x{h}")
 
         img_rgb = np.frombuffer(bytes(img_array), dtype=np.uint8).reshape((h, w, 3))
         pil_img = numpy_to_pil(img_rgb, w, h)
@@ -442,13 +447,15 @@ def process_image(img_array, corners_list, calib_dict):
         rectified_pil = perspective_rectify_pil(pil_img, corners)
         rect_w = rectified_pil.width
         rect_h = rectified_pil.height
-        print(f">>> rectify: {rect_w}x{rect_h}")
 
         rectified_rgb = np.array(rectified_pil)
         
         curve_type = calib.get('curve_type', 'magnitude')
-        mask = detect_trace_smart(rectified_rgb, curve_type)
-        print(f">>> mask ({curve_type}): {int(np.count_nonzero(mask))} pixels")
+        curve_color = calib.get('curve_color', 'yellow')
+        phase_output = calib.get('phase_output', 'wrapped')
+
+        mask = get_trace_mask(rectified_rgb, curve_color)
+        print(f">>> mask ({curve_color}): {int(np.count_nonzero(mask))} pixels")
 
         x_clean, y_clean, x_raw, y_raw = extract_trace(mask, curve_type)
         print(f">>> استخراج: {len(x_clean)} نقطه")
@@ -491,6 +498,11 @@ def process_image(img_array, corners_list, calib_dict):
         valid = (frequency >= lo) & (frequency <= hi)
         frequency = frequency[valid]
         amplitude_db = amplitude_db[valid]
+
+        # اعمال Unwrap در صورت نیاز
+        if curve_type == "phase" and phase_output == "unwrapped":
+            amplitude_db = unwrap_phase(amplitude_db)
+            print(">>> فاز Unwrap شد.")
 
         result_json = json.dumps({
             'frequency': frequency.tolist(),

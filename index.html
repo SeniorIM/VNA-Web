@@ -126,14 +126,30 @@
 <div class="card">
     <h2>مرحله 1: انتخاب نوع منحنی و تصویر</h2>
     
-    <!-- انتخاب نوع منحنی -->
-    <div style="margin-bottom: 12px;">
-        <label style="font-size:14px; color:#aaa; display:block; margin-bottom:4px;">
-            نوع منحنی مورد نظر را انتخاب کنید:
-        </label>
-        <select id="curveType" style="width:100%; padding:12px; border-radius:6px; background:#1a1a1a; color:#fff; border:1px solid #555; font-size:15px;">
-            <option value="magnitude" selected>دامنه (S11 / S21) - زرد، سفید یا آبی</option>
-            <option value="phase">فاز (Phase) - زرد یا فیروزه‌ای (با پرش‌های ۳۶۰ درجه)</option>
+    <div class="inputs" style="margin-bottom: 12px;">
+        <div>
+            <label>نوع منحنی</label>
+            <select id="curveType">
+                <option value="magnitude" selected>دامنه (Magnitude)</option>
+                <option value="phase">فاز (Phase)</option>
+            </select>
+        </div>
+        <div>
+            <label>رنگ منحنی</label>
+            <select id="curveColor">
+                <option value="yellow" selected>زرد (Yellow)</option>
+                <option value="white">سفید (White)</option>
+                <option value="cyan">فیروزه‌ای/آبی (Cyan)</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- گزینه اضافی برای فاز -->
+    <div id="phaseOptions" style="display:none; margin-bottom: 12px;">
+        <label>خروجی فاز</label>
+        <select id="phaseOutput">
+            <option value="wrapped" selected>Wrapped (با پرش‌های ۳۶۰ درجه)</option>
+            <option value="unwrapped">Unwrapped (صاف شده و پیوسته)</option>
         </select>
     </div>
 
@@ -286,7 +302,10 @@ setUploadEnabled(false);
 // ============================================================
 document.getElementById('curveType').addEventListener('change', function(e) {
     const type = e.target.value;
+    const phaseOpts = document.getElementById('phaseOptions');
+    
     if (type === 'phase') {
+        phaseOpts.style.display = 'block';
         document.getElementById('lbl_d_top').textContent = 'Y_top (deg) - بالا';
         document.getElementById('lbl_d_mid').textContent = 'Y_mid (deg) - وسط';
         document.getElementById('lbl_d_bot').textContent = 'Y_bot (deg) - پایین';
@@ -300,7 +319,10 @@ document.getElementById('curveType').addEventListener('change', function(e) {
             <option value="45">45 درجه</option>
             <option value="180">180 درجه</option>
         `;
+        // پیشنهاد رنگ فیروزه‌ای برای فاز
+        document.getElementById('curveColor').value = 'cyan';
     } else {
+        phaseOpts.style.display = 'none';
         document.getElementById('lbl_d_top').textContent = 'Y_top (dB) - بالا';
         document.getElementById('lbl_d_mid').textContent = 'Y_mid (dB) - وسط';
         document.getElementById('lbl_d_bot').textContent = 'Y_bot (dB) - پایین';
@@ -316,6 +338,7 @@ document.getElementById('curveType').addEventListener('change', function(e) {
             <option value="5">5 dB</option>
             <option value="1">1 dB</option>
         `;
+        document.getElementById('curveColor').value = 'yellow';
     }
 });
 
@@ -922,6 +945,9 @@ async function runExtraction() {
     }
 
     const curveType = document.getElementById('curveType').value;
+    const curveColor = document.getElementById('curveColor').value;
+    const phaseOutput = document.getElementById('phaseOutput').value;
+
     document.getElementById('status3').textContent = '⏳ در حال استخراج...';
     document.getElementById('extractBtn').disabled = true;
     try {
@@ -945,7 +971,9 @@ async function runExtraction() {
             d_bot: parseFloat(document.getElementById('d_bot').value),
             db_step: parseFloat(document.getElementById('dbStep').value),
             extra_refs: extra_refs,
-            curve_type: curveType
+            curve_type: curveType,
+            curve_color: curveColor,
+            phase_output: phaseOutput
         };
 
         const corners = [
