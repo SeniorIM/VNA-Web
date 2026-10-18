@@ -442,7 +442,7 @@ def process_image(img_array, corners_list, calib_dict):
         img_rgb = np.frombuffer(bytes(img_array), dtype=np.uint8).reshape((h, w, 3))
         pil_img = numpy_to_pil(img_rgb, w, h)
 
-        corners = np.array(corners_js, dtype=float
+        corners = np.array(corners_js, dtype=float)
         rectified_pil = perspective_rectify_pil(pil_img, corners)
         rect_w = rectified_pil.width
         rect_h = rectified_pil.height
