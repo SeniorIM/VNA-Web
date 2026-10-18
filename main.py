@@ -1,7 +1,6 @@
 """
 استخراج دقیق منحنی S11/S21 یا فاز از عکس VNA
-نسخه نهایی: پشتیبانی از منحنی‌های دامنه (زرد/سفید) و فاز (فیروزه‌ای)
-با اصلاح ردیابی در نقاط تیز
+نسخه نهایی: ردیابی مستقل از رنگ + حذف هوشمند خطوط گرید
 """
 from js import window
 import json
@@ -22,7 +21,6 @@ try:
     _mark("numpy", "loading")
     import numpy as np
     _mark("numpy", "ok")
-    print(">>> numpy آماده ✅")
 except Exception as e:
     _mark("numpy", "error")
     print(f">>> خطا numpy: {e}")
@@ -32,7 +30,6 @@ try:
     _mark("pillow", "loading")
     from PIL import Image
     _mark("pillow", "ok")
-    print(">>> Pillow آماده ✅")
 except Exception as e:
     _mark("pillow", "error")
     print(f">>> خطا Pillow: {e}")
@@ -99,51 +96,47 @@ def perspective_rectify_pil(pil_img, corners):
     return Image.fromarray(out_arr.astype(np.uint8), "RGB")
 
 
-def detect_trace_smart(rgb_arr, curve_type="magnitude", trace_color="auto"):
-    """ساخت ماسک رنگ منحنی با انتخاب رنگ قابل تغییر.
-
-    trace_color: auto, yellow, cyan, blue, red, green, magenta, white
+def get_trace_mask(rgb_arr, curve_type):
     """
-    rgb = rgb_arr.astype(np.int16)
-    r, g, b = rgb[:, :, 0], rgb[:, :, 1], rgb[:, :, 2]
-    mx = np.maximum(np.maximum(r, g), b)
-    mn = np.minimum(np.minimum(r, g), b)
-    sat = mx - mn
-    bright = (r + g + b) / 3.0
+    تشخیص منحنی بدون وابستگی به یک رنگ خاص.
+    - روشنایی را بررسی می‌کند.
+    - خطوط گرید را با فیلتر کردن خطوط باریک و بلند حذف می‌کند.
+    """
+    r = rgb_arr[:, :, 0].astype(np.int16)
+    g = rgb_arr[:, :, 1].astype(np.int16)
+    b = rgb_arr[:, :, 2].astype(np.int16)
 
-    yellow = (r > 100) & (g > 80) & (b < 150) & (r > b + 35) & (g > b + 20)
-    cyan = (g > 75) & (b > 75) & (r < 190) & (g > r + 15) & (b > r + 15)
-    blue = (b > 95) & (b > r + 25) & (b > g + 8) & (sat > 35)
-    red = (r > 100) & (r > g + 35) & (r > b + 25) & (sat > 35)
-    green = (g > 90) & (g > r + 25) & (g > b + 10) & (sat > 35)
-    magenta = (r > 90) & (b > 90) & (r > g + 20) & (b > g + 20) & (sat > 35)
-    white = (bright > 150) & (sat < 55)
-    chromatic = (sat > 45) & (bright > 65)
-
-    color_masks = {
-        "yellow": yellow,
-        "cyan": cyan,
-        "blue": blue,
-        "red": red,
-        "green": green,
-        "magenta": magenta,
-        "white": white,
-    }
-    chosen = str(trace_color or "auto").lower()
-    if chosen in color_masks:
-        mask = color_masks[chosen]
-    elif chosen == "auto":
-        # Auto is intentionally conservative: for magnitude prefer yellow if present;
-        # for phase use saturated non-white colors. If several traces share colors,
-        # choose a specific color from the UI for reliable results.
-        if curve_type == "magnitude":
-            mask = yellow if np.count_nonzero(yellow) > 20 else chromatic
-        else:
-            mask = chromatic
+    # هر پیکسلی که به اندازه کافی روشن است (منحنی یا گرید)
+    brightness = (r + g + b) / 3.0
+    
+    if curve_type == "phase":
+        # برای فاز: آبی/فیروزه‌ای یا روشن
+        is_curve_color = (g > 80) & (b > 80) & (g > r - 50) 
+        mask = is_curve_color & (brightness > 80)
     else:
-        mask = cyan if curve_type == "phase" else yellow
-
-    return mask.astype(np.uint8)
+        # برای دامنه: زرد یا سفید
+        is_colorful = (np.abs(r - g) > 20) | (np.abs(g - b) > 20) | (np.abs(r - b) > 20)
+        is_yellow = (r > 100) & (g > 80) & (r > b + 30)
+        is_white = (brightness > 150) & ~is_colorful
+        mask = is_yellow | is_white
+    
+    mask = mask.astype(np.uint8)
+    
+    # 👇 حذف خطوط گرید (افقی و عمودی)
+    # خطوط گرید معمولاً در یک ردیف یا ستون کامل کشیده شده‌اند
+    # اگر یک ردیف یا ستون بیش از ۸۰٪ روشن باشد، یعنی گرید است
+    row_sums = mask.sum(axis=1)
+    col_sums = mask.sum(axis=0)
+    
+    h, w = mask.shape
+    for i in range(h):
+        if row_sums[i] > w * 0.7: # خط افقی گرید
+            mask[i, :] = 0
+    for j in range(w):
+        if col_sums[j] > h * 0.7: # خط عمودی گرید
+            mask[:, j] = 0
+            
+    return mask
 
 
 def remove_small_components_np(mask, min_width_ratio=0.02):
@@ -202,15 +195,13 @@ def split_groups(rows, gap=3):
     return groups
 
 
-def track_nearest_np(cleaned, start_y, allow_wrap=False):
+def track_nearest_np(cleaned, start_y, curve_type="magnitude"):
     """
-    ردیابی هوشمند با قابلیت عبور از پرش‌های عمودی (برای منحنی فاز)
+    ردیابی بهبودیافته برای فاز و دامنه.
+    در منحنی فاز، اجازه می‌دهد که با پرش‌های ناگهانی (۳۶۰ درجه) حرکت کند.
     """
     h, w = cleaned.shape
     ys = np.full(w, np.nan, dtype=float)
-    def row_distance(a, b):
-        d = abs(float(a) - float(b))
-        return min(d, h - d) if allow_wrap else d
     start_col = None
     for x in range(w):
         if cleaned[:, x].sum() > 0:
@@ -223,30 +214,41 @@ def track_nearest_np(cleaned, start_y, allow_wrap=False):
     if len(rows) == 0:
         return ys
     groups = split_groups(rows)
-    closest = min(groups, key=lambda g: row_distance(np.mean(g), start_y))
+    closest = min(groups, key=lambda g: abs(np.mean(g) - start_y))
     ys[start_col] = np.mean(closest)
     prev_y = ys[start_col]
 
-    # حرکت به راست
-    for x in range(start_col + 1, w):
+    def get_next_y(x, prev_y):
         rows = np.flatnonzero(cleaned[:, x])
         if len(rows) == 0:
-            continue
+            return np.nan
+        
         groups = split_groups(rows)
-        closest = min(groups, key=lambda g: row_distance(np.mean(g), prev_y))
-        ys[x] = np.mean(closest)
-        prev_y = ys[x]
+        
+        # برای منحنی فاز، ممکن است پرش تند داشته باشیم
+        if curve_type == "phase":
+            # به جای نزدیک‌ترین، گروهی را انتخاب کن که شامل prev_y باشد یا در راستای حرکت باشد
+            for g in groups:
+                if min(g) <= prev_y <= max(g):
+                    return np.mean(g)
+            # اگر هیچ گروهی شامل prev_y نبود، نزدیک‌ترین را بردار
+            closest = min(groups, key=lambda g: abs(np.mean(g) - prev_y))
+            return np.mean(closest)
+        else:
+            # برای دامنه: نزدیک‌ترین گروه
+            closest = min(groups, key=lambda g: abs(np.mean(g) - prev_y))
+            return np.mean(closest)
+
+    # حرکت به راست
+    for x in range(start_col + 1, w):
+        ys[x] = get_next_y(x, prev_y)
+        if not np.isnan(ys[x]): prev_y = ys[x]
 
     # حرکت به چپ
     prev_y = ys[start_col]
     for x in range(start_col - 1, -1, -1):
-        rows = np.flatnonzero(cleaned[:, x])
-        if len(rows) == 0:
-            continue
-        groups = split_groups(rows)
-        closest = min(groups, key=lambda g: row_distance(np.mean(g), prev_y))
-        ys[x] = np.mean(closest)
-        prev_y = ys[x]
+        ys[x] = get_next_y(x, prev_y)
+        if not np.isnan(ys[x]): prev_y = ys[x]
 
     return ys
 
@@ -338,7 +340,7 @@ def extract_trace(mask, curve_type="magnitude"):
         raise RuntimeError("منحنی پیدا نشد.")
 
     start_y = find_curve_center_y_np(cleaned)
-    ys_raw_full = track_nearest_np(cleaned, start_y, allow_wrap=(curve_type == "phase"))
+    ys_raw_full = track_nearest_np(cleaned, start_y, curve_type)
     valid_count = np.isfinite(ys_raw_full).sum()
     if valid_count < max(10, int(w * 0.3)):
         raise RuntimeError(f"ردیابی ناموفق: {valid_count} نقطه.")
@@ -348,13 +350,11 @@ def extract_trace(mask, curve_type="magnitude"):
     x_raw = xs_arr[valid_raw]
     y_raw = ys_raw_full[valid_raw]
 
-    # تنظیمات فیلتر بر اساس نوع منحنی
     if curve_type == "phase":
-        # فاز: ردیابی با فاصله دوری بالا/پایین انجام شده است.
-        # از حذف نقاط پرت و median smoothing صرف‌نظر می‌کنیم تا پرش ±180° حفظ شود.
-        ys = fill_short_gaps(ys_raw_full, max_gap_ratio=0.005)
+        ys = fill_short_gaps(ys_raw_full, max_gap_ratio=0.01)
+        ys = remove_isolated_spikes(ys, h, max_jump_ratio=0.95)
+        ys = smooth_subpixel(ys, window=3)
     else:
-        # منحنی دامنه: حذف نویز و هموارسازی عادی
         ys = fill_short_gaps(ys_raw_full, max_gap_ratio=0.03)
         ys = remove_isolated_spikes(ys, h, max_jump_ratio=0.20)
         ys = smooth_subpixel(ys, window=5)
@@ -373,12 +373,10 @@ def make_x_mapper(corners, rect_w):
     x_tl = float(corners[0][0])
     x_tr = float(corners[1][0])
     denom = x_tr - x_tl
-    if abs(denom) < 1e-6:
-        denom = 1.0
+    if abs(denom) < 1e-6: denom = 1.0
 
     def mapper(x_orig):
         return (float(x_orig) - x_tl) / denom * (rect_w - 1)
-
     return mapper
 
 
@@ -390,8 +388,7 @@ def calibrate_x(x1_r, f1, x2_r, f2, extra_refs_r):
             if abs(xr - xr2) < 2.0:
                 is_dup = True
                 break
-        if not is_dup:
-            points.append((xr, fr))
+        if not is_dup: points.append((xr, fr))
 
     n = len(points)
     if n >= 3:
@@ -400,14 +397,11 @@ def calibrate_x(x1_r, f1, x2_r, f2, extra_refs_r):
         A = np.vstack([X, np.ones_like(X)]).T
         coef, *_ = np.linalg.lstsq(A, F, rcond=None)
         a, b = float(coef[0]), float(coef[1])
-        F_pred = a * X + b
-        rmse = float(np.sqrt(np.mean((F - F_pred) ** 2)))
-        method = f"least_squares({n}pts)"
-        return a, b, method, rmse
+        rmse = float(np.sqrt(np.mean((F - (a * X + b)) ** 2)))
+        return a, b, f"least_squares({n}pts)", rmse
     else:
         denom = x2_r - x1_r
-        if abs(denom) < 1e-6:
-            denom = 1.0
+        if abs(denom) < 1e-6: denom = 1.0
         a = (f2 - f1) / denom
         b = f1 - a * x1_r
         return a, b, "two_point", 0.0
@@ -418,20 +412,17 @@ def calibrate_y(y_top_r, d_top, y_mid_r, d_mid, y_bot_r, d_bot):
     d_pts = np.array([d_top, d_mid, d_bot], dtype=np.float64)
     A_ls = np.vstack([y_pts, np.ones(3)]).T
     coef, *_ = np.linalg.lstsq(A_ls, d_pts, rcond=None)
-    a, b = float(coef[0]), float(coef[1])
-    return a, b
+    return float(coef[0]), float(coef[1])
 
 
 def make_y_mapper(corners, rect_h):
     tl_y = float(corners[0][1])
     bl_y = float(corners[3][1])
     denom = bl_y - tl_y
-    if abs(denom) < 1e-6:
-        denom = 1.0
+    if abs(denom) < 1e-6: denom = 1.0
 
     def mapper(y_orig):
         return (float(y_orig) - tl_y) / denom * (rect_h - 1)
-
     return mapper
 
 
@@ -447,7 +438,6 @@ def process_image(img_array, corners_list, calib_dict):
 
         h = int(window.imageHeight)
         w = int(window.imageWidth)
-        print(f">>> ابعاد: {w}x{h}")
 
         img_rgb = np.frombuffer(bytes(img_array), dtype=np.uint8).reshape((h, w, 3))
         pil_img = numpy_to_pil(img_rgb, w, h)
@@ -456,20 +446,16 @@ def process_image(img_array, corners_list, calib_dict):
         rectified_pil = perspective_rectify_pil(pil_img, corners)
         rect_w = rectified_pil.width
         rect_h = rectified_pil.height
-        print(f">>> rectify: {rect_w}x{rect_h}")
 
         rectified_rgb = np.array(rectified_pil)
         
         curve_type = calib.get('curve_type', 'magnitude')
-        trace_color = calib.get('trace_color', 'auto')
-        phase_output = calib.get('phase_output', 'both')
-        mask = detect_trace_smart(rectified_rgb, curve_type, trace_color)
+        mask = get_trace_mask(rectified_rgb, curve_type)
         print(f">>> mask ({curve_type}): {int(np.count_nonzero(mask))} pixels")
 
         x_clean, y_clean, x_raw, y_raw = extract_trace(mask, curve_type)
         print(f">>> استخراج: {len(x_clean)} نقطه")
 
-        # ---------- کالیبراسیون X ----------
         x1_px = float(calib['x1']); f1 = float(calib['f1'])
         x2_px = float(calib['x2']); f2 = float(calib['f2'])
 
@@ -478,20 +464,14 @@ def process_image(img_array, corners_list, calib_dict):
         x2_r = map_x(x2_px)
 
         extra_raw = calib.get('extra_refs', [])
-        if hasattr(extra_raw, 'to_py'):
-            extra_raw = extra_raw.to_py()
+        if hasattr(extra_raw, 'to_py'): extra_raw = extra_raw.to_py()
         extra_refs_r = []
         for ref in extra_raw:
-            if hasattr(ref, 'to_py'):
-                ref = ref.to_py()
-            xr_orig = float(ref['x'])
-            fr = float(ref['freq'])
-            extra_refs_r.append((map_x(xr_orig), fr))
+            if hasattr(ref, 'to_py'): ref = ref.to_py()
+            extra_refs_r.append((map_x(float(ref['x'])), float(ref['freq'])))
         
         a_x, b_x, calib_method, rmse = calibrate_x(x1_r, f1, x2_r, f2, extra_refs_r)
-        print(f">>> X calib [{calib_method}]: freq = {a_x:.6f}*x + {b_x:.4f} (RMSE={rmse:.4f})")
 
-        # ---------- کالیبراسیون Y ----------
         y_top = float(calib['y_top']); d_top = float(calib['d_top'])
         y_mid = float(calib['y_mid']); d_mid = float(calib['d_mid'])
         y_bot = float(calib['y_bot']); d_bot = float(calib['d_bot'])
@@ -502,55 +482,26 @@ def process_image(img_array, corners_list, calib_dict):
         y_bot_r = map_y(y_bot)
 
         a_y, b_y = calibrate_y(y_top_r, d_top, y_mid_r, d_mid, y_bot_r, d_bot)
-        print(f">>> Y calib: d = {a_y:.4f}*y + {b_y:.4f}")
 
-        # ---------- محاسبه نهایی ----------
         frequency = a_x * x_clean + b_x
-        y_calibrated = a_y * y_clean + b_y
+        amplitude_db = a_y * y_clean + b_y
 
-        # فاز پیچیده‌شده و بازشده را هر دو محاسبه می‌کنیم.
-        # np.unwrap باید روی رادیان اجرا شود؛ خروجی دوباره به درجه تبدیل می‌شود.
-        phase_wrapped = y_calibrated.copy() if curve_type == "phase" else None
-        phase_unwrapped = (np.rad2deg(np.unwrap(np.deg2rad(y_calibrated), discont=np.pi))
-                           if curve_type == "phase" else None)
-        if curve_type == "phase" and phase_output == "unwrapped":
-            amplitude_db = phase_unwrapped.copy()
-        else:
-            # در حالت wrapped و both، نمودار پیش‌فرض همان داده دیده‌شده روی دستگاه است.
-            amplitude_db = y_calibrated.copy()
-
-        # مرتب‌سازی بر اساس فرکانس
         order = np.argsort(frequency)
         frequency = frequency[order]
         amplitude_db = amplitude_db[order]
-        if curve_type == "phase":
-            phase_wrapped = phase_wrapped[order]
-            phase_unwrapped = phase_unwrapped[order]
 
-        # محدود به بازه X1..X2
         lo, hi = sorted((f1, f2))
         valid = (frequency >= lo) & (frequency <= hi)
         frequency = frequency[valid]
         amplitude_db = amplitude_db[valid]
-        if curve_type == "phase":
-            phase_wrapped = phase_wrapped[valid]
-            phase_unwrapped = phase_unwrapped[valid]
 
-        print(f">>> نتیجه: {len(frequency)} نقطه [{calib_method}]")
-
-        result_data = {
+        result_json = json.dumps({
             'frequency': frequency.tolist(),
             'amplitude': amplitude_db.tolist(),
             'x_raw': x_raw.tolist(),
             'y_raw': y_raw.tolist(),
             'calib_method': calib_method,
-            'curve_type': curve_type,
-            'phase_output': phase_output,
-        }
-        if curve_type == "phase":
-            result_data['phase_wrapped'] = phase_wrapped.tolist()
-            result_data['phase_unwrapped'] = phase_unwrapped.tolist()
-        result_json = json.dumps(result_data)
+        })
         return result_json
 
     except Exception as e:
